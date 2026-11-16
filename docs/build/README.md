@@ -52,14 +52,14 @@ This folder turns [PLAN.md](../../PLAN.md) into work packages. Each package is s
 | 17 | Client state, transport and shell | 04, 13 | M | medium | no |
 | 18 | Start panel | 17 | S | low | no |
 | 19 | Review panel | 17 | M | medium | no |
-| 20 | Automatic layout | 08 | M | high | no |
+| 20 | Automatic layout | 08, 09, 19 | M | high | no |
 | 21 | Solve, check and answer panels | 14, 17 | S | low | no |
 | 22 | Browser check and README | 16, 18 to 21 | S | medium | no |
 | 23 | Reader agent | 13 | M | high | tests no, live yes |
 | 24 | Solver agent loop | 07, 23 | M | high | tests no, live yes |
 | 25 | Live wiring and smoke run | 16, 24 | S | medium | yes |
 | 26 | Graph core | 06, 07 | M | medium | no |
-| 27 | Chart renderer and graph problems | 11, 12, 26 | M | medium | no |
+| 27 | Chart renderer and graph problems | 10, 11, 12, 26 | M | medium | no |
 | 28 | Graph review UI | 19, 27 | M | medium | no |
 | 29 | Graph reading and replay sample | 25, 28 | S | high | yes |
 | 30 | Live eval runner | 25, 27 | M | medium | tests no |
@@ -68,6 +68,8 @@ This folder turns [PLAN.md](../../PLAN.md) into work packages. Each package is s
 | 33 | Live host (optional) | 25 | M | high | yes, plus a yes to host |
 
 ## Build order
+
+The diagram is a sketch. The "Needs" column in the package list is exact.
 
 ```
 01 ─┬─ 02 ─┬─ 04 ──────────────┐
