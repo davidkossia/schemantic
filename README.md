@@ -24,3 +24,27 @@ TypeScript end to end. Node with `ws` on the server. React, Tailwind and Vite on
 ## License
 
 MIT
+
+## Layout
+
+| Path | Contents |
+|---|---|
+| `src/core` | Schemas, unit parser, MNA solver, graph tools, checker. No model calls. |
+| `src/agents` | Anthropic client, reader agent, solver agent. |
+| `src/server` | HTTP and WebSocket server. |
+| `src/shared` | Message types shared by server and client. |
+| `web` | React, Tailwind and Vite client. |
+| `eval` | Problem set, image renderer, eval runner. |
+| `fixtures` | Recorded sample session for replay mode. |
+| `test` | Vitest tests. |
+
+The folders hold placeholders. The project itself is not built yet.
+
+## Develop
+
+```bash
+npm install
+npm run typecheck
+npm test
+npm run build:web
+```
