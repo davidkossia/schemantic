@@ -15,11 +15,11 @@ Schemantic is a 2026 rebuild of NexusAgents, an earlier project of mine whose re
 
 ## Status
 
-Rebuild in progress. See [PLAN.md](PLAN.md) for milestones, architecture, the eval design, costs and what needs an API key.
+Rebuild in progress. See [PLAN.md](PLAN.md) for milestones, architecture, the eval design, costs and what needs an API key. The step-by-step build guide is in [docs/build](docs/build/README.md).
 
 ## Stack
 
-TypeScript end to end. Node with `ws` on the server. React, Tailwind and Vite on the client. The official `@anthropic-ai/sdk` with `claude-opus-5-5`, zod for structured outputs, and `mathjs` for the linear solve and expressions.
+TypeScript end to end. Node with `ws` on the server. React, Tailwind and Vite on the client. The official `@anthropic-ai/sdk` with `claude-opus-5-5`, zod for structured outputs, and `mathjs` for the expression tool.
 
 ## License
 

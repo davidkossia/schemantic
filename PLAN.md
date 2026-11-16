@@ -2,7 +2,7 @@
 
 Schemantic is a 2026 rebuild of NexusAgents, an earlier project of mine whose repository was lost. This file is the build plan. The README describes what exists today.
 
-Revision 2, 2026-11-16. The last section lists what changed from revision 1.
+Revision 3, 2026-11-16. The last two sections list what changed. The step-by-step build guide, with one work package per step, is in [docs/build](docs/build/README.md).
 
 ## Goal
 
@@ -52,9 +52,9 @@ browser (React + Tailwind)  <-- WebSocket -->  Node server (ws)
 
 ### Message protocol
 
-Client to server: `start` (image, media type, question), `approve` (the edited structure), `retry`, `cancel`.
+Client to server: `start` (an image or a sample id, and the question), `approve` (the edited structure), `reopen`, `cancel`.
 
-Server to client: `phase`, `parsed` (structure plus validator warnings), `awaiting_review`, `solving`, `token`, `step` (a tool call and its result), `check` (the checker's report), `done` (answer, verified or not), `error`.
+Server to client: `hello`, `reading`, `parsed` (structure plus validator warnings), `awaiting_review`, `solving`, `token`, `step` (a tool call and its result), `checking`, `check` (the checker's report), `done` (answer, verified or not), `error`.
 
 Both directions are zod-validated. The server re-validates the structure in `approve` and never trusts the client's copy.
 
@@ -68,7 +68,7 @@ A circuit is a netlist. Each component has:
 | `label` | The text printed next to the symbol, copied as written (`4k7`, `10 mA`). |
 | `value`, `unit` | The reader's number in SI units. |
 | `a`, `b` | The two nodes. For a voltage source, `a` is the + terminal. A current source pushes current into `a`. |
-| `at`, `orientation` | Where the symbol sits in the image (0 to 1 on each axis) and whether it is horizontal or vertical. |
+| `pa`, `pb` | Where each terminal sits in the image (0 to 1 on each axis). |
 | `uncertain` | An optional note when the reader is unsure. |
 
 The netlist also names the ground node and what the question asks for.
@@ -81,14 +81,14 @@ A graph is axes (label, unit, range, scale), series as key points, and annotatio
 
 Automatic schematic layout from a bare netlist is a hard problem, so the plan avoids it:
 
-- The original image is shown with a numbered marker on each component, placed from the reader's `at` field. This is the main check: marker 3 sits on a resistor, row 3 says what the reader thinks it is.
-- Next to it, the schematic is redrawn from the netlist, with each symbol at its `at` position snapped to a grid and wires routed between terminals that share a node. If positions are missing or collide, a plain ladder layout is used instead.
+- The original image is shown with a numbered marker on each component, placed from the reader's terminal positions. This is the main check: marker 3 sits on a resistor, row 3 says what the reader thinks it is.
+- Next to it, the schematic is redrawn from the netlist, with each symbol at its position snapped to a grid and wires routed between terminals that share a node. If positions are missing or collide, a plain bus layout is used instead: each node is a horizontal wire and every component gets its own column.
 - The table is editable. Hovering a row highlights its marker and its symbol. Every edit re-runs the validator and redraws the schematic.
 - Warnings and `uncertain` notes are highlighted. Approve is blocked while the circuit cannot be solved.
 
 ### Solver tools
 
-- `solve_circuit`: runs MNA on the approved netlist. It accepts optional changes (set a component's value, remove a component, zero a source), which is what Thevenin, superposition and design questions need.
+- `solve_circuit`: runs MNA on the approved netlist. It accepts optional changes (set a component's value, remove a component, zero a source, add a test source), which is what Thevenin, superposition and design questions need.
 - `evaluate`: a `mathjs` expression evaluator.
 - `graph_query`: value at x, slope, area under a series, extrema.
 - `submit_answer`: the final answer as a typed claim.
@@ -97,14 +97,14 @@ Forcing a tool call is rejected on Opus 5.5, so the loop uses automatic tool cho
 
 ### Typed claims and the checker
 
-`submit_answer` takes a claim with a kind: `node_voltage`, `branch_current`, `power`, `equivalent_resistance`, `thevenin`, `component_value_for_condition`, or a graph kind. Each kind has its own check:
+`submit_answer` takes a claim with a kind: `node_voltage`, `branch_current`, `power`, `equivalent_resistance`, `thevenin`, `max_power_transfer`, `component_value_for_condition`, or a graph kind. Each kind has its own check:
 
-- The checker computes the claimed quantity from the approved structure through a separate code path from the solver tools. It applies element laws: Ohm's law per component, current balance (KCL) at every node, and power balance (delivered equals dissipated).
+- The checker measures the claimed quantity from the approved structure itself. Every solution it uses must pass a certificate first: code that solves nothing and only checks element laws on the solution. It recomputes each resistor's current with Ohm's law, sums the currents at every node (KCL), checks each source's voltage, and checks that the powers balance. A linear circuit has one solution, so a solution that passes is the right one, whatever produced it.
 - It compares the claim's value and unit against that result, within 1% for circuits.
 - A design claim ("R3 = 2 kΩ gives 5 V at node B") is checked by substituting the value and testing the condition.
 - A claim kind the checker does not know is reported as not verified. It is never passed silently.
 
-The MNA solver itself is tested against closed-form answers written by hand, so it is not graded against itself.
+The MNA solver is a small Gaussian elimination written for this project, with a fixed rule for when a circuit cannot be solved. It is tested against closed-form answers written by hand, so it is not graded against itself.
 
 ### Why the split
 
@@ -119,7 +119,7 @@ The MNA solver itself is tested against closed-form answers written by hand, so 
 - Both use `fallbacks: "default"` with the `server-side-fallback-2026-07-01` beta on `client.beta.messages`, so a safety decline retries on a fallback model. A final `stop_reason` of `refusal` becomes an `error` event.
 - Every response's token usage is recorded per session.
 
-To check before writing agent code (M6): that structured output and `fallbacks` work on the same beta call. If they do not, the reader requests JSON with the same schema and validates it with zod itself.
+The installed SDK's types accept structured output and `fallbacks` on the same beta call. Whether the server accepts the pair needs one live call, made in M6. If it does not, the reader requests JSON with the same schema and validates it with zod itself.
 
 ### Limits and safety
 
@@ -134,7 +134,7 @@ Replay mode runs the whole pipeline with no API key:
 - The scripted model client returns a recorded reader result that contains one deliberate misread, so the review has something to fix.
 - After approval, a scripted solver calls the real `solve_circuit` on whatever you approved and submits the result. The math and the check are real. The explanation text is a template.
 - The UI labels the session: "Replay mode. No model is called."
-- Once the key exists, `SCHEMANTIC_MODE=record` saves a live session's model responses to `fixtures/`, and the replay sample becomes a recording of a real run.
+- After the live eval, each sample's reading is replaced with the model's real reading of that image, with the one deliberate misread applied on top and labelled as such.
 
 Because the pipeline has no Node dependencies, replay mode can also run entirely in the browser. That makes a free static demo possible (M9).
 
@@ -145,8 +145,8 @@ Ordered so that everything that runs without a key comes first.
 | # | Milestone | Done when | Key needed |
 |---|---|---|---|
 | M1 | Plan, scaffold, CI | Done | No |
-| M2 | Circuit core | Schemas, unit parser, validator, MNA and checker pass unit tests against closed-form answers. The checker rejects corrupted claims (5% off, wrong unit, wrong sign). | No |
-| M3 | Schematic renderer and problem set | The renderer draws all 14 circuits. The solver-only eval runs and prints a table. | No |
+| M2 | Circuit core | Schemas, unit parser, validator, MNA and checker pass unit tests against closed-form answers. The checker rejects corrupted claims (5% off, wrong sign, off by a factor of 1,000). | No |
+| M3 | Schematic renderer and problem set | The renderer draws all 14 circuits. The core eval runs and prints a table. | No |
 | M4 | Session pipeline and server | A test client completes the full flow over a real WebSocket in replay mode, including a failed check and a cancel. | No |
 | M5 | UI | Upload, marker overlay, editable table, redrawn schematic, streamed steps and the check report work in replay mode, checked in a browser at phone and desktop widths. README has a screenshot. | No |
 | M6 | Reader and solver agents | The tool loop passes tests against a fake client. One live run completes on a sample image. | Live run only |
@@ -160,29 +160,30 @@ Schemantic is showable after M5: it runs locally on the sample problems in repla
 
 - **Set:** 18 problems.
   - 8 circuits answered by one solve: dividers, series and parallel networks, a ladder, a bridge, a circuit with a current source. Questions ask for a node voltage, a branch current or a power.
-  - 6 circuits that need more than one solve: a Thevenin equivalent, maximum power transfer, the resistor value that gives a target voltage, one source's contribution by superposition, equivalent resistance, and a comparison of two branch powers. These show the solver agent doing more than one tool call.
+  - 6 circuits that need more than one solve: a Thevenin equivalent, maximum power transfer, the resistor value that gives a target voltage, one source's contribution by superposition, equivalent resistance, and the resistor value that gives a target current. These show the solver agent doing more than one tool call.
+  - Every netlist and expected answer is in [docs/build/PROBLEMS.md](docs/build/PROBLEMS.md), checked numerically.
   - 4 graphs: value at x, slope, area, maximum. The series are piecewise-linear through grid points, so the known answers are exact.
 - **Images:** generated by `eval/render.ts` from each problem's ground truth, drawn as SVG and rasterized to PNG. No third-party images, so there is no licence to track. Drawing style varies across problems: zigzag and box resistor symbols, label formats (`4.7 kΩ`, `4k7`, `4700 Ω`), and rotated components.
 - **Known answers:** each problem file holds a closed-form formula written by hand.
 - **Metrics:**
   - *Parse accuracy:* the share of ground-truth components the reader returns with the right type, value and connections. Node names are arbitrary, so scoring finds the node mapping that matches the most components before counting. Source polarity counts. Reported with precision, so extra components count against it. For graphs: the share of key points within 2% of the axis range.
   - *Final-answer accuracy:* the share of problems within 1% of the known answer (5% for graphs), with the reader's output approved unedited.
-  - *Solver-only accuracy:* the same, with the ground-truth structure fed in. The gap between this and final-answer accuracy is what the human review is worth.
-  - *Checker:* the share of deliberately corrupted claims it rejects. Runs without a key.
+  - *Solver-only accuracy:* the same, with the ground-truth structure fed to the live solver. The gap between this and final-answer accuracy is what the human review is worth.
+  - *Core:* the checker verifies every expected answer against the ground truth, and rejects every deliberately corrupted claim. Runs without a key.
 - **Samples:** one run per problem by default, and `--samples 3` for a steadier number. The README states the sample count next to the results, because model output varies between runs.
 - **Spend guard:** the live eval prints its cost estimate and does not start without `--yes`. `--max-usd` stops it at a ceiling. It reports measured tokens and cost at the end.
 - **Limits:** generated images are cleaner than photos. The numbers show the pipeline works on clean drawings. They do not predict accuracy on hand-drawn or photographed circuits. A few photographed problems can be added later as a separate, clearly labelled row.
 
 ## Costs (estimates)
 
-Opus 5.5 lists at $4 per million input tokens and $20 per million output tokens. A reader call is about 3,000 input and 4,000 output tokens. A solver run is 3 to 8 turns. That puts one problem at roughly $0.15 to $0.35 and the full 18-problem eval at roughly $3 to $6 per sample. The first measured run replaces these estimates.
+Opus 5.5 lists at $4 per million input tokens and $20 per million output tokens. A reader call is about 3,000 input and 4,000 output tokens. A solver run is 3 to 8 turns, at roughly $0.18. Each problem needs one reader call and two solver runs (end to end, and solver only). That puts one problem at roughly $0.45 and the full 18-problem eval at roughly $5 to $10 per sample. The first measured run replaces these estimates.
 
 ## What needs David
 
 | Item | Needed for | Status |
 |---|---|---|
 | `ANTHROPIC_API_KEY` in `.env` | M6 live run, M7 live run, M8 | Needed. Never paste it in chat. |
-| A yes to spend about $3 to $6 of API credit | The M8 eval run | Needed before M8. |
+| A yes to spend about $5 to $10 of API credit | The M8 eval run | Needed before M8. |
 | A yes to host a live server | A public demo that calls the model | Optional. Costs money for hosting and for API use. |
 
 M2 to M5 need nothing from you.
@@ -191,14 +192,24 @@ M2 to M5 need nothing from you.
 
 | Risk | Plan |
 |---|---|
-| The redrawn schematic looks messy for unusual layouts | The marker overlay on the original image is the main check. The redraw is secondary, with a ladder-layout fallback. |
-| Structured output and `fallbacks` may not combine on one call | Checked at the start of M6. The fallback is plain JSON validated with zod. |
+| The redrawn schematic looks messy for unusual layouts | The marker overlay on the original image is the main check. The redraw is secondary, with a bus-layout fallback. |
+| The server may reject structured output combined with `fallbacks` | The SDK types allow it. One live call in M6 confirms it. The fallback is plain JSON validated with zod. |
 | Clean generated images inflate parse accuracy | Vary drawing styles. State the limit next to the number. |
-| The scripted replay solver could be mistaken for a model run | Label it in the UI and the README. Replace it with a recorded live run at M8. |
+| The scripted replay solver could be mistaken for a model run | Label it in the UI and the README. The sample readings are re-recorded from a live run at M8. |
 
 ## Out of scope
 
 AC analysis, capacitors and inductors in transient mode, dependent sources, hand-drawn or photographed input in the main eval, multi-image problems, accounts, and storage of user uploads.
+
+## Changes in revision 3
+
+1. **Build guide.** [docs/build](docs/build/README.md) splits the work into 33 packages, each with exact files, signatures and tests, and one contracts file they all share.
+2. **Certificate.** The checker's independence is now concrete: a solution must pass element-law checks written separately from the solver.
+3. **Terminal positions.** The reader returns both terminal positions of each component, which also gives the orientation and the polarity side.
+4. **Eval rows.** The row that runs without a key is the core check. Solver-only accuracy uses the live solver, so the eval makes two solver runs per problem and the cost estimate rose to $5 to $10.
+5. **Problem set fixed.** All 18 problems have netlists and numerically checked answers.
+6. **Linear solver.** A small Gaussian elimination replaces `mathjs` for the solve, so the rule for an unsolvable circuit is exact. `mathjs` stays for the expression tool.
+7. **Protocol.** `reopen` replaces `retry`, and `hello`, `reading` and `checking` replace the generic `phase` event.
 
 ## Changes in revision 2
 
