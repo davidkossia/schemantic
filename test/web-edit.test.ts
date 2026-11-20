@@ -1,8 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { addComponent, removeComponent, setField, setGround } from "../web/src/edit";
+import {
+  addComponent,
+  addPoint,
+  graphLimitIssues,
+  removeComponent,
+  removePoint,
+  setAxis,
+  setField,
+  setGround,
+  setPoint,
+} from "../web/src/edit";
+import { GRAPHS } from "./fixtures/graphs";
+import { LIMITS } from "../src/shared/limits";
 import { validate } from "../src/core/validate";
 import { circuit, resistor, vsource } from "./helpers";
-import type { Circuit } from "../src/core/schema";
+import type { Circuit, Graph } from "../src/core/schema";
 
 // The c01 replay reading: R2 printed as "2 kΩ" but read as 200.
 function c01Reading(): Circuit {
@@ -77,5 +89,79 @@ describe("structure edits", () => {
     removeComponent(c, "R1");
     setGround(c, "B");
     expect(c).toEqual(before);
+  });
+});
+
+describe("graph edits", () => {
+  const g01 = (): Graph => structuredClone(GRAPHS["g01"] as Graph);
+  const xs = (g: Graph): number[] => (g.series[0]?.points ?? []).map((p) => p.x);
+
+  it("setPoint changes a value and re-sorts by x", () => {
+    const g = g01();
+    expect(setPoint(g, "s1", 1, "y", "5").series[0]?.points[1]).toEqual({ x: 2, y: 5 });
+    const moved = setPoint(g, "s1", 1, "x", "9");
+    expect(xs(moved)).toEqual([0, 5, 8, 9, 10]);
+    expect(moved.series[0]?.points[3]).toEqual({ x: 9, y: 4 });
+  });
+
+  it("setPoint ignores bad text, unknown series, bad index and unchanged values", () => {
+    const g = g01();
+    expect(setPoint(g, "s1", 1, "y", "abc")).toBe(g);
+    expect(setPoint(g, "s1", 1, "y", " ")).toBe(g);
+    expect(setPoint(g, "nope", 1, "y", "3")).toBe(g);
+    expect(setPoint(g, "s1", 9, "y", "3")).toBe(g);
+    expect(setPoint(g, "s1", 1, "y", "4")).toBe(g);
+  });
+
+  it("addPoint appends after the last x, and stops at the point limit", () => {
+    const added = addPoint(g01(), "s1");
+    expect(added.series[0]?.points).toHaveLength(6);
+    expect(added.series[0]?.points[5]).toEqual({ x: 11, y: 16 });
+    const full = g01();
+    const s = full.series[0];
+    if (s) s.points = Array.from({ length: LIMITS.maxPoints }, (_, i) => ({ x: i, y: 0 }));
+    expect(addPoint(full, "s1")).toBe(full);
+    expect(graphLimitIssues(full)).toEqual([]);
+    if (s) s.points.push({ x: LIMITS.maxPoints, y: 0 });
+    expect(graphLimitIssues(full)).toHaveLength(1);
+  });
+
+  it("graphLimitIssues blocks a reading with more series than the server accepts", () => {
+    const g = g01();
+    const first = g.series[0];
+    if (first) g.series = Array.from({ length: LIMITS.maxSeries + 1 }, (_, i) => ({ ...first, id: `s${i + 1}` }));
+    expect(graphLimitIssues(g).some((m) => m.includes(`${LIMITS.maxSeries + 1} series`))).toBe(true);
+  });
+
+  it("removePoint removes exactly one point", () => {
+    expect(xs(removePoint(g01(), "s1", 2))).toEqual([0, 2, 8, 10]);
+  });
+
+  it("setAxis sets label, unit, min and max", () => {
+    const g = g01();
+    expect(setAxis(g, "x", "label", "elapsed").x.label).toBe("elapsed");
+    expect(setAxis(g, "y", "unit", " km ").y.unit).toBe("km");
+    expect(setAxis(g, "y", "unit", "  ").y.unit).toBeNull();
+    expect(setAxis(g, "y", "max", "25").y.max).toBe(25);
+    expect(setAxis(g, "x", "min", "-1").x.min).toBe(-1);
+  });
+
+  it("setAxis rejects bad numbers and text over the field limit", () => {
+    const g = g01();
+    expect(setAxis(g, "x", "max", "abc")).toBe(g);
+    expect(setAxis(g, "x", "min", "")).toBe(g);
+    expect(setAxis(g, "x", "label", "a".repeat(LIMITS.maxFieldChars + 1))).toBe(g);
+    expect(setAxis(g, "x", "label", "a".repeat(LIMITS.maxFieldChars)).x.label).toHaveLength(LIMITS.maxFieldChars);
+  });
+
+  it("no graph function mutates its input", () => {
+    const g = g01();
+    const before = copy(g);
+    setPoint(g, "s1", 1, "x", "9");
+    addPoint(g, "s1");
+    removePoint(g, "s1", 0);
+    setAxis(g, "x", "label", "z");
+    setAxis(g, "y", "max", "99");
+    expect(g).toEqual(before);
   });
 });

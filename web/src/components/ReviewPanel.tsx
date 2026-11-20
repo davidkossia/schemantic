@@ -1,6 +1,8 @@
 import { useId, useState } from "react";
 import type { Structure, Warning } from "../../../src/core/schema";
 import { canSolve } from "../../../src/core/validate";
+import { graphLimitIssues } from "../edit";
+import { GraphReview } from "./GraphReview";
 import { ImageMarkers } from "./ImageMarkers";
 import { NetlistTable } from "./NetlistTable";
 import { SchematicView } from "./SchematicView";
@@ -20,8 +22,9 @@ const button =
 
 export function ReviewPanel({ imageUrl, structure, warnings, onEdit, onApprove, onCancel }: ReviewPanelProps) {
   const [hover, setHover] = useState<string | null>(null);
-  const solvable = canSolve(warnings);
-  const firstError = warnings.find((w) => w.severity === "error");
+  const limitIssue = structure.kind === "graph" ? graphLimitIssues(structure)[0] : undefined;
+  const solvable = canSolve(warnings) && limitIssue === undefined;
+  const reason = warnings.find((w) => w.severity === "error")?.message ?? limitIssue;
 
   const reasonId = useId();
   const actions = (
@@ -29,7 +32,7 @@ export function ReviewPanel({ imageUrl, structure, warnings, onEdit, onApprove, 
       <button
         type="button"
         disabled={!solvable}
-        aria-describedby={!solvable && firstError ? reasonId : undefined}
+        aria-describedby={!solvable && reason ? reasonId : undefined}
         onClick={onApprove}
         className={`${button} bg-blue-700 text-white disabled:cursor-not-allowed disabled:opacity-50`}
       >
@@ -39,7 +42,7 @@ export function ReviewPanel({ imageUrl, structure, warnings, onEdit, onApprove, 
         Cancel
       </button>
       <span id={reasonId} aria-live="polite" className="text-sm text-red-700 dark:text-red-300">
-        {!solvable && firstError ? firstError.message : ""}
+        {!solvable && reason ? reason : ""}
       </span>
     </div>
   );
@@ -47,8 +50,7 @@ export function ReviewPanel({ imageUrl, structure, warnings, onEdit, onApprove, 
   if (structure.kind === "graph") {
     return (
       <section className="space-y-4">
-        <ImageMarkers imageUrl={imageUrl} components={[]} highlightId={null} />
-        <p>Graph review arrives in WP-28.</p>
+        <GraphReview imageUrl={imageUrl} graph={structure} warnings={warnings} onEdit={onEdit} />
         {actions}
       </section>
     );
