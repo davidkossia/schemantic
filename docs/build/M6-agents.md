@@ -11,7 +11,7 @@ These were confirmed against `@anthropic-ai/sdk` 1.8.0 in `node_modules` and its
 | Model | `claude-opus-5-5`. Thinking is always on. Do not send a `thinking` parameter or a thinking budget. |
 | Effort | `output_config: { effort: "high" }`. The default on this model is `medium`. |
 | Fallbacks | `fallbacks: "default"` with `betas: ["server-side-fallback-2026-07-01"]`, on `client.beta.messages`. The type is `BetaFallbacksParam = Array<…> \| "default"`. |
-| Structured output | `client.beta.messages.parse(…)` with `output_config: { format: betaZodOutputFormat(schema) }` from `@anthropic-ai/sdk/helpers/beta/zod`. The result has `parsed_output`, which is null when parsing failed. |
+| Structured output | `client.beta.messages.parse(…)` with `output_config: { format: betaZodOutputFormat(schema) }` from `@anthropic-ai/sdk/helpers/beta/zod`. The result has `parsed_output`, which is null only when the reply has no text block. When the JSON fails the schema, SDK 1.8.0 throws `AnthropicError("Failed to parse structured output: …")` instead (found in WP-23); treat that error like a null result. |
 | Schema limits | No recursion, no numeric or string length limits, and every object needs `additionalProperties: false`. The root must be an object. |
 | Tool choice | Forcing a tool (`any` or a named tool) returns a 400 on this model. Use the default automatic choice, and `strict: true` on each tool. |
 | Streaming | `client.beta.messages.stream(…)` returns a stream with `.on("text", …)` and `.finalMessage()`. |
@@ -56,7 +56,7 @@ export function readStructure(api: MessagesApi, input: ReadInput): Promise<ReadO
 1. `input.image` null throws `ModelError("read_failed")`.
 2. Make one `parse` call: `baseParams()`, `max_tokens: 16000`, the system prompt `READER_SYSTEM`, one user message with the image block (base64 source and media type) followed by the question text, and `output_config: { effort: "high", format: betaZodOutputFormat(ReaderOutput) }`. Pass `{ signal: input.signal }` as the request options.
 3. A `stop_reason` of `refusal` throws `ModelError("refused")`.
-4. If `parsed_output` is null, or `stop_reason` is `max_tokens`, make the call once more. A second failure throws `ModelError("read_failed")`. The usage counts both calls.
+4. If `parsed_output` is null, `stop_reason` is `max_tokens`, or the SDK throws its structured-output parse error, make the call once more. A second failure throws `ModelError("read_failed")`. The usage counts both calls.
 5. Return `parsed_output.structure` and the usage.
 
 `READER_SYSTEM` in `src/agents/prompts.ts` is written for a careful model, in plain prose, without capital-letter emphasis. It must say:
