@@ -5,15 +5,25 @@ import { renderDrawing } from "../src/core/schematic";
 import { validate } from "../src/core/validate";
 import { gridToPoint } from "../eval/types";
 import { PROBLEMS } from "../eval/problems/index";
+import { runCore } from "../eval/report";
 import { canonical, key, netlistGroups, terminalGroups, wirePoints } from "./helpers";
 
 describe("problem set", () => {
-  it("has 14 problems in id order, 8 single-step and 6 multi-step", () => {
-    expect(PROBLEMS.map((p) => p.id)).toEqual(
-      Array.from({ length: 14 }, (_, i) => `c${String(i + 1).padStart(2, "0")}`),
-    );
-    expect(PROBLEMS.filter((p) => !p.multiStep)).toHaveLength(8);
-    expect(PROBLEMS.filter((p) => p.multiStep).map((p) => p.id)).toEqual([
+  it("has 18 problems in id order: 14 circuits, then 4 graphs", () => {
+    expect(PROBLEMS).toHaveLength(18);
+    expect(PROBLEMS.map((p) => p.id)).toEqual([
+      ...Array.from({ length: 14 }, (_, i) => `c${String(i + 1).padStart(2, "0")}`),
+      "g01",
+      "g02",
+      "g03",
+      "g04",
+    ]);
+  });
+
+  it("has 8 single-step and 6 multi-step circuits", () => {
+    const circuits = PROBLEMS.filter((p) => p.truth.kind === "circuit");
+    expect(circuits.filter((p) => !p.multiStep)).toHaveLength(8);
+    expect(circuits.filter((p) => p.multiStep).map((p) => p.id)).toEqual([
       "c09",
       "c10",
       "c11",
@@ -23,7 +33,15 @@ describe("problem set", () => {
     ]);
   });
 
-  for (const p of PROBLEMS) {
+  it("runCore verifies all 18 and rejects every mutation", () => {
+    const result = runCore(PROBLEMS);
+    expect(result.rows).toHaveLength(18);
+    expect(result.verified).toBe(18);
+    expect(result.mutationsTotal).toBeGreaterThan(0);
+    expect(result.mutationsRejected).toBe(result.mutationsTotal);
+  });
+
+  for (const p of PROBLEMS.filter((q) => q.truth.kind === "circuit")) {
     describe(p.id, () => {
       const d = p.drawing;
       if (!d) throw new Error(`${p.id} has no drawing`);
@@ -160,6 +178,25 @@ describe("problem set", () => {
         expect(svg).not.toContain("undefined");
         expect(svg).not.toContain("Infinity");
       });
+    });
+  }
+});
+
+describe("graph problems", () => {
+  const graphs = PROBLEMS.filter((p) => p.truth.kind === "graph");
+
+  it("are g01 to g04, with no drawing", () => {
+    expect(graphs.map((p) => p.id)).toEqual(["g01", "g02", "g03", "g04"]);
+    for (const p of graphs) expect(p.drawing).toBeNull();
+  });
+
+  for (const p of graphs) {
+    it(`${p.id} parses, validates and checks out`, () => {
+      expect(Structure.safeParse(p.truth).success).toBe(true);
+      expect(Claim.safeParse(p.expected).success).toBe(true);
+      expect(validate(p.truth)).toEqual([]);
+      expect(checkClaim(p.truth, p.expected).verified).toBe(true);
+      expect(p.truth.asked.summary).toBe(p.question);
     });
   }
 });

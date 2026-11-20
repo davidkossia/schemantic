@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { scoreNetlist } from "../eval/score";
-import type { Circuit } from "../src/core/schema";
+import { scoreGraph, scoreNetlist } from "../eval/score";
+import type { Circuit, Graph } from "../src/core/schema";
 import { CIRCUITS } from "./fixtures/circuits";
+import { GRAPHS } from "./fixtures/graphs";
 import { circuit, resistor, vsource } from "./helpers";
 
 function get(id: string): Circuit {
@@ -100,5 +101,84 @@ describe("scoreNetlist", () => {
   it("throws with more than 7 truth nodes besides ground", () => {
     const parts = Array.from({ length: 8 }, (_, i) => resistor(`R${i}`, 100, `n${i}`, "gnd"));
     expect(() => scoreNetlist(circuit(parts), circuit([]))).toThrow();
+  });
+});
+
+describe("scoreGraph", () => {
+  function graphOf(id: string): Graph {
+    const g = GRAPHS[id];
+    if (g === undefined) throw new Error(`missing fixture ${id}`);
+    return g;
+  }
+
+  function withPoints(g: Graph, points: { x: number; y: number }[]): Graph {
+    return { ...g, series: g.series.map((s) => ({ ...s, points })) };
+  }
+
+  it("scores each graph against itself as exact", () => {
+    for (const id of ["g01", "g02", "g03", "g04"]) {
+      const s = scoreGraph(graphOf(id), graphOf(id));
+      expect(s.exact).toBe(true);
+      expect(s.matched).toBe(s.truthCount);
+    }
+    expect(scoreGraph(graphOf("g01"), graphOf("g01")).truthCount).toBe(5);
+  });
+
+  it("still matches a point moved by 1% of the range", () => {
+    const g = graphOf("g01");
+    const pts = (g.series[0]?.points ?? []).map((p) => (p.x === 5 ? { x: p.x, y: p.y + 0.2 } : p)); // 1% of 20
+    const s = scoreGraph(g, withPoints(g, pts));
+    expect(s.exact).toBe(true);
+  });
+
+  it("does not match a point moved by 5% of the range", () => {
+    const g = graphOf("g01");
+    const pts = (g.series[0]?.points ?? []).map((p) => (p.x === 5 ? { x: p.x, y: p.y + 1 } : p)); // 5% of 20
+    const s = scoreGraph(g, withPoints(g, pts));
+    expect(s.matched).toBe(4);
+    expect(s.exact).toBe(false);
+  });
+
+  it("checks x as well as y", () => {
+    const g = graphOf("g01");
+    const pts = (g.series[0]?.points ?? []).map((p) => (p.x === 5 ? { x: p.x + 0.5, y: p.y } : p)); // 5% of 10
+    expect(scoreGraph(g, withPoints(g, pts)).matched).toBe(4);
+  });
+
+  it("gives recall 4/5 and precision 1 when a point is missing", () => {
+    const g = graphOf("g01");
+    const pts = (g.series[0]?.points ?? []).filter((p) => p.x !== 5);
+    const s = scoreGraph(g, withPoints(g, pts));
+    expect(s.recall).toBeCloseTo(4 / 5);
+    expect(s.precision).toBe(1);
+    expect(s.exact).toBe(false);
+  });
+
+  it("counts every point of an unpaired truth series as unmatched", () => {
+    const g = graphOf("g01");
+    const first = g.series[0];
+    if (!first) throw new Error("no series");
+    const truth: Graph = { ...g, series: [first, { ...first, id: "s2", name: "s2" }] };
+    const s = scoreGraph(truth, g);
+    expect(s.truthCount).toBe(10);
+    expect(s.matched).toBe(5);
+    expect(s.recall).toBeCloseTo(0.5);
+  });
+
+  it("uses each read point once", () => {
+    const g = graphOf("g01");
+    const first = g.series[0]?.points[0];
+    if (!first) throw new Error("no point");
+    const truth = withPoints(g, [first, { x: first.x + 0.1, y: first.y }]);
+    const s = scoreGraph(truth, withPoints(g, [first]));
+    expect(s.matched).toBe(1);
+    expect(s.recall).toBeCloseTo(0.5);
+  });
+
+  it("gives precision 0 for an empty reading", () => {
+    const g = graphOf("g01");
+    const s = scoreGraph(g, { ...g, series: [] });
+    expect(s.precision).toBe(0);
+    expect(s.matched).toBe(0);
   });
 });

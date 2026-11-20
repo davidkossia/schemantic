@@ -78,11 +78,8 @@ function runProblem(problem: Problem): CoreRow {
   };
 }
 
-/**
- * Graph problems are skipped until measure() supports graph queries (WP-26).
- */
 export function runCore(problems: Problem[]): CoreResult {
-  const rows = problems.filter((p) => p.truth.kind !== "graph").map(runProblem);
+  const rows = problems.map(runProblem);
   return {
     rows,
     verified: rows.filter((r) => r.verified).length,

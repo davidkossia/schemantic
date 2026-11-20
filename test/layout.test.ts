@@ -73,7 +73,7 @@ function expectValid(c: Circuit, d: Drawing): void {
 }
 
 describe("autoDrawing", () => {
-  for (const p of PROBLEMS) {
+  for (const p of PROBLEMS.filter((q) => q.truth.kind === "circuit")) {
     describe(p.id, () => {
       const truth = truthOf(p.id);
 

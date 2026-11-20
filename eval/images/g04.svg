@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">
+<rect width="1200" height="800" fill="#ffffff"/>
+<line x1="204.25" y1="35" x2="204.25" y2="700" stroke="#d9d9d9" stroke-width="1"/>
+<text x="204.25" y="735.29" font-family="Helvetica, Arial, sans-serif" font-size="23.53" text-anchor="middle" fill="#000000">1</text>
+<line x1="378.75" y1="35" x2="378.75" y2="700" stroke="#d9d9d9" stroke-width="1"/>
+<text x="378.75" y="735.29" font-family="Helvetica, Arial, sans-serif" font-size="23.53" text-anchor="middle" fill="#000000">2</text>
+<line x1="553.25" y1="35" x2="553.25" y2="700" stroke="#d9d9d9" stroke-width="1"/>
+<text x="553.25" y="735.29" font-family="Helvetica, Arial, sans-serif" font-size="23.53" text-anchor="middle" fill="#000000">3</text>
+<line x1="727.75" y1="35" x2="727.75" y2="700" stroke="#d9d9d9" stroke-width="1"/>
+<text x="727.75" y="735.29" font-family="Helvetica, Arial, sans-serif" font-size="23.53" text-anchor="middle" fill="#000000">4</text>
+<line x1="902.25" y1="35" x2="902.25" y2="700" stroke="#d9d9d9" stroke-width="1"/>
+<text x="902.25" y="735.29" font-family="Helvetica, Arial, sans-serif" font-size="23.53" text-anchor="middle" fill="#000000">5</text>
+<line x1="1076.75" y1="35" x2="1076.75" y2="700" stroke="#d9d9d9" stroke-width="1"/>
+<text x="1076.75" y="735.29" font-family="Helvetica, Arial, sans-serif" font-size="23.53" text-anchor="middle" fill="#000000">6</text>
+<line x1="117" y1="700" x2="1164" y2="700" stroke="#d9d9d9" stroke-width="1"/>
+<text x="102.88" y="708.24" font-family="Helvetica, Arial, sans-serif" font-size="23.53" text-anchor="end" fill="#000000">0</text>
+<line x1="117" y1="605" x2="1164" y2="605" stroke="#d9d9d9" stroke-width="1"/>
+<text x="102.88" y="613.24" font-family="Helvetica, Arial, sans-serif" font-size="23.53" text-anchor="end" fill="#000000">5</text>
+<line x1="117" y1="510" x2="1164" y2="510" stroke="#d9d9d9" stroke-width="1"/>
+<text x="102.88" y="518.24" font-family="Helvetica, Arial, sans-serif" font-size="23.53" text-anchor="end" fill="#000000">10</text>
+<line x1="117" y1="415" x2="1164" y2="415" stroke="#d9d9d9" stroke-width="1"/>
+<text x="102.88" y="423.24" font-family="Helvetica, Arial, sans-serif" font-size="23.53" text-anchor="end" fill="#000000">15</text>
+<line x1="117" y1="320" x2="1164" y2="320" stroke="#d9d9d9" stroke-width="1"/>
+<text x="102.88" y="328.24" font-family="Helvetica, Arial, sans-serif" font-size="23.53" text-anchor="end" fill="#000000">20</text>
+<line x1="117" y1="225" x2="1164" y2="225" stroke="#d9d9d9" stroke-width="1"/>
+<text x="102.88" y="233.24" font-family="Helvetica, Arial, sans-serif" font-size="23.53" text-anchor="end" fill="#000000">25</text>
+<line x1="117" y1="130" x2="1164" y2="130" stroke="#d9d9d9" stroke-width="1"/>
+<text x="102.88" y="138.24" font-family="Helvetica, Arial, sans-serif" font-size="23.53" text-anchor="end" fill="#000000">30</text>
+<line x1="117" y1="35" x2="1164" y2="35" stroke="#d9d9d9" stroke-width="1"/>
+<text x="102.88" y="43.24" font-family="Helvetica, Arial, sans-serif" font-size="23.53" text-anchor="end" fill="#000000">35</text>
+<rect x="151.9" y="472" width="104.7" height="228" fill="#1f5fbf" stroke="#000000" stroke-width="1"/>
+<rect x="326.4" y="358" width="104.7" height="342" fill="#1f5fbf" stroke="#000000" stroke-width="1"/>
+<rect x="500.9" y="225" width="104.7" height="475" fill="#1f5fbf" stroke="#000000" stroke-width="1"/>
+<rect x="675.4" y="111" width="104.7" height="589" fill="#1f5fbf" stroke="#000000" stroke-width="1"/>
+<rect x="849.9" y="282" width="104.7" height="418" fill="#1f5fbf" stroke="#000000" stroke-width="1"/>
+<rect x="1024.4" y="415" width="104.7" height="285" fill="#1f5fbf" stroke="#000000" stroke-width="1"/>
+<line x1="117" y1="35" x2="117" y2="700" stroke="#000000" stroke-width="2"/>
+<line x1="117" y1="700" x2="1164" y2="700" stroke="#000000" stroke-width="2"/>
+<text x="640.5" y="786.67" font-family="Helvetica, Arial, sans-serif" font-size="26.67" text-anchor="middle" fill="#000000">month</text>
+<text x="29.33" y="367.5" font-family="Helvetica, Arial, sans-serif" font-size="26.67" text-anchor="middle" fill="#000000" transform="rotate(-90 29.33 367.5)">sales (units)</text>
+</svg>

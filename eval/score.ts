@@ -4,7 +4,7 @@
  * `scoreNetlist` tries every way to map the truth nodes onto the read nodes and keeps the best.
  * Component ids and labels do not count.
  */
-import type { Circuit, Component } from "../src/core/schema";
+import type { Circuit, Component, Graph } from "../src/core/schema";
 import { closeTo } from "../src/core/units";
 
 export type NetlistScore = {
@@ -109,5 +109,54 @@ export function scoreNetlist(truth: Circuit, read: Circuit): NetlistScore {
     precision: readCount === 0 ? 0 : matched / readCount,
     exact: matched === truthCount && matched === readCount,
     mapping,
+  };
+}
+
+export type GraphScore = {
+  truthCount: number;
+  readCount: number;
+  matched: number;
+  recall: number; // matched / truthCount
+  precision: number; // matched / readCount, or 0 when readCount is 0
+  exact: boolean; // matched === truthCount && matched === readCount
+};
+
+const GRAPH_TOLERANCE = 0.02;
+
+/**
+ * Score a graph reading against the truth. Series pair by order. A truth point matches a read point of the paired
+ * series when it is within 2% of the truth axis range in x and in y. Each read point matches at most once.
+ */
+export function scoreGraph(truth: Graph, read: Graph): GraphScore {
+  const dx = GRAPH_TOLERANCE * Math.abs(truth.x.max - truth.x.min);
+  const dy = GRAPH_TOLERANCE * Math.abs(truth.y.max - truth.y.min);
+  let truthCount = 0;
+  let readCount = 0;
+  let matched = 0;
+
+  truth.series.forEach((ts, i) => {
+    truthCount += ts.points.length;
+    const rs = read.series[i];
+    if (!rs) return;
+    const used = new Set<number>();
+    for (const t of ts.points) {
+      const j = rs.points.findIndex(
+        (r, k) => !used.has(k) && Math.abs(r.x - t.x) <= dx + 1e-9 && Math.abs(r.y - t.y) <= dy + 1e-9,
+      );
+      if (j >= 0) {
+        used.add(j);
+        matched++;
+      }
+    }
+  });
+  for (const rs of read.series) readCount += rs.points.length;
+
+  return {
+    truthCount,
+    readCount,
+    matched,
+    recall: truthCount === 0 ? 0 : matched / truthCount,
+    precision: readCount === 0 ? 0 : matched / readCount,
+    exact: matched === truthCount && matched === readCount,
   };
 }

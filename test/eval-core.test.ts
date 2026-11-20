@@ -6,8 +6,8 @@ describe("core eval", () => {
   const result = runCore(PROBLEMS);
 
   it("verifies every problem", () => {
-    expect(result.verified).toBe(14);
-    expect(result.rows.length).toBe(14);
+    expect(result.verified).toBe(18);
+    expect(result.rows.length).toBe(18);
   });
 
   it("rejects every mutated claim", () => {
@@ -17,8 +17,8 @@ describe("core eval", () => {
 
   it("prints one row per problem and the expected answer for c01", () => {
     const table = coreTable(result);
-    const rows = table.split("\n").filter((line) => /^\| c\d{2} /.test(line));
-    expect(rows.length).toBe(14);
+    const rows = table.split("\n").filter((line) => /^\| [cg]\d{2} /.test(line));
+    expect(rows.length).toBe(18);
     const c01 = rows.find((line) => line.startsWith("| c01 "));
     expect(c01).toBeDefined();
     expect(c01).toContain("8 V");
