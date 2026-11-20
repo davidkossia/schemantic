@@ -2,6 +2,7 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 import type { Structure } from "../../src/core/schema";
 import type { ImageInput } from "../../src/pipeline/model";
 import { initialState, reduce, type UiState } from "./state";
+import { localTransport } from "./localTransport";
 import { wsTransport, type Transport } from "./transport";
 
 export type StartInput = { file: File | null; sampleId: string | null; question: string };
@@ -41,7 +42,7 @@ export function useSession(): Session {
   stateRef.current = state;
 
   useEffect(() => {
-    const t = wsTransport(socketUrl());
+    const t = import.meta.env.VITE_TRANSPORT === "local" ? localTransport() : wsTransport(socketUrl());
     transport.current = t;
     const unsubscribe = t.subscribe((message) => dispatch({ type: "server", message }));
     return () => {

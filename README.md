@@ -35,6 +35,8 @@ npm run dev:server
 
 Then open http://localhost:8787, pick a sample, and press **Read image**.
 
+`npm run build:pages` builds the same replay demo as a static site that runs entirely in the browser, with no server.
+
 To work on the client with hot reload, run the server and Vite in two terminals:
 
 ```bash

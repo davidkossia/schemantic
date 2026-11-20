@@ -12,6 +12,7 @@
     "dev:server": "tsx watch src/server/index.ts",
     "dev:web": "vite --config web/vite.config.ts",
     "build:web": "vite build --config web/vite.config.ts",
+    "build:pages": "VITE_TRANSPORT=local vite build --config web/vite.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "eval": "tsx eval/run.ts",
