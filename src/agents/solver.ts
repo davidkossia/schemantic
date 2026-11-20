@@ -8,8 +8,8 @@ import { TOOL_SPECS } from "../core/tools";
 import { ModelError } from "../pipeline/model";
 import type { SolveInput, SolveOutput, Usage } from "../pipeline/model";
 import { LIMITS } from "../shared/limits";
-import { baseParams, toModelError, usageOf } from "./client";
-import type { MessagesApi } from "./client";
+import { addUsage, baseParams, toModelError, unfinishedUsage, usageOf } from "./client";
+import type { MessagesApi, UnfinishedStream } from "./client";
 import { SOLVER_SYSTEM } from "./prompts";
 
 export const NUDGE = "Finish by calling submit_answer with your claim.";
@@ -65,6 +65,8 @@ export async function solveWithTools(
   const messages: BetaMessageParam[] = [{ role: "user", content: firstMessage(input) }];
   let streamed = "";
   let nudged = false;
+  // The stream of the turn in progress, until its final message arrives. On a throw, its usage so far is counted.
+  let unfinished: UnfinishedStream | null = null;
 
   try {
     for (let turn = 0; turn < limits.maxTurns; turn++) {
@@ -83,14 +85,14 @@ export async function solveWithTools(
         },
         { signal: input.signal },
       );
+      unfinished = stream;
       stream.on("text", (delta) => {
         streamed += delta;
         input.onEvent({ type: "token", text: delta });
       });
       const message = await stream.finalMessage();
-      const u = usageOf(message);
-      usage.inputTokens += u.inputTokens;
-      usage.outputTokens += u.outputTokens;
+      unfinished = null;
+      addUsage(usage, usageOf(message));
 
       const stop = message.stop_reason;
       if (stop === "refusal") throw new ModelError("refused", "The model declined to solve this problem.");
@@ -131,7 +133,9 @@ export async function solveWithTools(
       throw new ModelError("solve_failed", "The model stopped for a reason the solver does not handle.");
     }
   } catch (e) {
-    // Every error carries the usage spent so far, so the session can count it.
+    // Every error carries the usage spent so far, so the session can count it. That includes a turn
+    // that was aborted, timed out or failed mid-stream: its tokens were spent even with no final message.
+    addUsage(usage, unfinishedUsage(unfinished));
     throw toModelError(e, "solve_failed", { ...usage });
   }
 

@@ -19,7 +19,8 @@ For a graph:
 For either kind:
 - asked.summary restates the question in one sentence.
 - asked.target names the node or component id the question is about, when there is one. Otherwise it is null.
-- Use notes for anything else a reviewer should know, such as an assumption you made. Otherwise set notes to null.`;
+- Use notes for anything else a reviewer should know, such as an assumption you made. Otherwise set notes to null.
+- Keep every text field under 200 characters: notes, uncertain, asked.summary, ids and labels.`;
 
 export const SOLVER_SYSTEM = `You explain to a student how to solve a STEM problem. The user message gives the question and the approved structure: a circuit or a graph that a person has already checked against the original image. Treat that structure as the only source of facts about the circuit or graph. Do not assume a component, a node or a data point that it does not have. Changes you pass to solve_circuit are for computing, and never alter the structure itself.
 

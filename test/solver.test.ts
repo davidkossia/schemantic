@@ -4,6 +4,7 @@ import type { MessagesApi } from "../src/agents/client";
 import { SOLVER_SYSTEM } from "../src/agents/prompts";
 import { NUDGE, solveWithTools } from "../src/agents/solver";
 import type { CheckReport, Circuit } from "../src/core/schema";
+import { messageStart, sdkStreamApi } from "./fakeModel";
 import { createToolRunner } from "../src/core/tools";
 import { ModelError } from "../src/pipeline/model";
 import type { SolveEvent, SolveInput } from "../src/pipeline/model";
@@ -49,7 +50,6 @@ function fakeStream(turn: Turn) {
 }
 
 function fakeApi(turns: Turn[]) {
-  const parse = vi.fn();
   let i = 0;
   const stream = vi.fn();
   stream.mockImplementation(() => {
@@ -58,7 +58,7 @@ function fakeApi(turns: Turn[]) {
     if (turn === undefined) throw new Error("no scripted turn");
     return fakeStream(turn);
   });
-  const api: MessagesApi = { parse, stream };
+  const api: MessagesApi = { stream };
   return { api, stream };
 }
 
@@ -374,7 +374,6 @@ describe("solveWithTools", () => {
   });
 
   it("rejects with cancelled when the stream reports an abort", async () => {
-    const parse = vi.fn();
     const stream = vi.fn();
     stream.mockImplementation(() => ({
       on() {
@@ -382,18 +381,46 @@ describe("solveWithTools", () => {
       },
       finalMessage: () => Promise.reject(new APIUserAbortError()),
     }));
-    const api: MessagesApi = { parse, stream };
+    const api: MessagesApi = { stream };
     const e = await rejection(solveWithTools(api, input().input));
     expect(e.code).toBe("cancelled");
   });
 
+  it("counts the tokens of a turn aborted mid-stream, on top of the finished turns", async () => {
+    // Turn 1 finishes (110 tokens). Turn 2 is aborted after message_start reported 50,000 input tokens.
+    let calls = 0;
+    const stream = vi.fn();
+    stream.mockImplementation(() => {
+      calls += 1;
+      if (calls === 1) return fakeStream(EVALUATE_TURN);
+      return {
+        currentMessage: { usage: { input_tokens: 50_000, output_tokens: 3 } },
+        on() {
+          return this;
+        },
+        finalMessage: () => Promise.reject(new APIUserAbortError()),
+      };
+    });
+    const api: MessagesApi = { stream };
+    const e = await rejection(solveWithTools(api, input().input));
+    expect(e.code).toBe("cancelled");
+    expect(e.usage).toEqual({ inputTokens: 50_100, outputTokens: 13 });
+  });
+
+  it("counts a turn aborted mid-stream through the real SDK stream", async () => {
+    const controller = new AbortController();
+    const api = sdkStreamApi([{ events: [messageStart(50_000)], hang: true }], () => controller.abort());
+    const e = await rejection(solveWithTools(api, input({ signal: controller.signal }).input));
+    expect(e.code).toBe("cancelled");
+    expect(e.usage).toEqual({ inputTokens: 50_000, outputTokens: 1 });
+  });
+
   it("keeps the text of an unexpected error out of the ModelError message", async () => {
-    const parse = vi.fn();
     const stream = vi.fn();
     stream.mockImplementation(() => {
       throw new Error("request failed with key sk-ant-secret");
     });
-    const api: MessagesApi = { parse, stream };
+    const api: MessagesApi = { stream };
     const e = await rejection(solveWithTools(api, input().input));
     expect(e.code).toBe("solve_failed");
     expect(e.message).not.toContain("sk-ant-secret");

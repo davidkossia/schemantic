@@ -11,7 +11,13 @@ export const ImageInput = z.object({
 });
 export type ImageInput = z.infer<typeof ImageInput>;
 
-export type ReadInput = { image: ImageInput | null; sampleId: string | null; question: string; signal: AbortSignal };
+export type ReadInput = {
+  image: ImageInput | null;
+  sampleId: string | null;
+  question: string;
+  tokenBudget: number;               // tokens the session has left; the read stops before a call once its usage reaches this
+  signal: AbortSignal;
+};
 export type ReadOutput = { structure: Structure; usage: Usage };
 
 export type SolveEvent =

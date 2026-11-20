@@ -90,6 +90,9 @@ export function createSession(deps: SessionDeps): Session {
 
   // Tokens spent over the whole session (the WebSocket connection). Never reset; the token budget applies to it.
   let total: Usage = { inputTokens: 0, outputTokens: 0 };
+  // Model calls that have not settled, including ones that were cancelled or timed out. Until they
+  // settle, `total` is missing their tokens, so a new `start` is refused.
+  let unsettled = 0;
 
   function send(message: ServerMessage): void {
     if (!closed) deps.send(message);
@@ -120,12 +123,15 @@ export function createSession(deps: SessionDeps): Session {
     const count = (u: Usage) => {
       total = { inputTokens: total.inputTokens + u.inputTokens, outputTokens: total.outputTokens + u.outputTokens };
     };
+    unsettled += 1;
     return call.then(
       (out) => {
+        unsettled -= 1;
         count(out.usage);
         return out;
       },
       (e: unknown) => {
+        unsettled -= 1;
         if (e instanceof ModelError && e.usage !== undefined) count(e.usage);
         throw e;
       },
@@ -165,6 +171,7 @@ export function createSession(deps: SessionDeps): Session {
               image: message.image,
               sampleId: message.sampleId,
               question: message.question,
+              tokenBudget: tokensLeft(),
               signal: controller.signal,
             }),
           ),
@@ -269,6 +276,10 @@ export function createSession(deps: SessionDeps): Session {
       sendError("bad_message", "That sample does not exist.");
       return;
     }
+    if (unsettled > 0) {
+      sendError("bad_state", "The last request is still stopping. Try again in a moment.");
+      return;
+    }
     if (tokensLeft() <= 0) {
       sendError("limit_reached", "This session has used its token budget.");
       return;
@@ -288,14 +299,19 @@ export function createSession(deps: SessionDeps): Session {
   }
 
   function onApprove(structure: Structure): void {
+    // Size checks come first: `validate` solves the circuit, and its cost grows with the square of the node count.
+    if (JSON.stringify(structure).length > limits.maxStructureChars) {
+      sendError("bad_message", "The structure is too large to solve.");
+      return;
+    }
+    if (structure.kind === "circuit" && structure.components.length > limits.maxComponents) {
+      sendError("cannot_solve", `The circuit has more than ${limits.maxComponents} components.`);
+      return;
+    }
     const warnings = validate(structure);
-    const tooBig = structure.kind === "circuit" && structure.components.length > limits.maxComponents;
-    if (!canSolve(warnings) || tooBig) {
+    if (!canSolve(warnings)) {
       const firstError = warnings.find((w) => w.severity === "error");
-      const reason = tooBig
-        ? `The circuit has more than ${limits.maxComponents} components.`
-        : (firstError?.message ?? "The structure cannot be solved.");
-      sendError("cannot_solve", reason);
+      sendError("cannot_solve", firstError?.message ?? "The structure cannot be solved.");
       return;
     }
     approved = structure;

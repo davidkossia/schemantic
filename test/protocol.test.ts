@@ -45,6 +45,42 @@ describe("client messages", () => {
     expect(parseClientMessage(JSON.stringify(bad)).ok).toBe(false);
   });
 
+  it("rejects approve with a string field over 200 characters, and accepts 200", () => {
+    expect(LIMITS.maxFieldChars).toBe(200);
+    const withNotes = (notes: string) => JSON.stringify({ type: "approve", structure: { ...structure, notes } });
+    expect(parseClientMessage(withNotes("x".repeat(200))).ok).toBe(true);
+    const result = parseClientMessage(withNotes("x".repeat(201)));
+    expect(result).toEqual({ ok: false, error: "A text field in the structure is longer than 200 characters." });
+
+    const longId = circuit([vsource("V".repeat(201), 12, "A", "gnd"), resistor("R1", 1000, "A", "gnd")]);
+    expect(parseClientMessage(JSON.stringify({ type: "approve", structure: longId })).ok).toBe(false);
+  });
+
+  it("rejects approve with more components, series or points than the limits", () => {
+    const many = circuit(Array.from({ length: LIMITS.maxComponents + 1 }, (_, i) => resistor(`R${i}`, 1, "A", "gnd")));
+    expect(parseClientMessage(JSON.stringify({ type: "approve", structure: many })).ok).toBe(false);
+
+    const graph = (seriesCount: number, pointCount: number) => ({
+      kind: "graph",
+      title: null,
+      x: { label: "t", unit: null, min: 0, max: 1 },
+      y: { label: "v", unit: null, min: 0, max: 1 },
+      series: Array.from({ length: seriesCount }, (_, k) => ({
+        id: `s${k}`,
+        name: "s",
+        kind: "line",
+        points: Array.from({ length: pointCount }, (_, i) => ({ x: i, y: i })),
+      })),
+      asked: { summary: "Q", target: null },
+      notes: null,
+    });
+    const parse = (structure: unknown) => parseClientMessage(JSON.stringify({ type: "approve", structure })).ok;
+    expect(parse(graph(LIMITS.maxSeries, 2))).toBe(true);
+    expect(parse(graph(LIMITS.maxSeries + 1, 2))).toBe(false);
+    expect(parse(graph(1, LIMITS.maxPoints))).toBe(true);
+    expect(parse(graph(1, LIMITS.maxPoints + 1))).toBe(false);
+  });
+
   it("returns an error for text that is not JSON", () => {
     const result = parseClientMessage("not json");
     expect(result.ok).toBe(false);
@@ -81,6 +117,12 @@ describe("server messages", () => {
 
   it("parses a step whose output has extra keys", () => {
     const raw = JSON.stringify({ type: "step", index: 1, tool: "evaluate", input: "1+1", output: { ok: false, error: "bad", extra: 1 } });
+    expect(parseServerMessage(raw).ok).toBe(true);
+  });
+
+  it("parses a reader's structure with long text and many components in parsed (no approve limits)", () => {
+    const long = circuit(Array.from({ length: LIMITS.maxComponents + 1 }, (_, i) => resistor(`R${i}`, 1, "A", "gnd")));
+    const raw = JSON.stringify({ type: "parsed", structure: { ...long, notes: "x".repeat(500) }, warnings: [] });
     expect(parseServerMessage(raw).ok).toBe(true);
   });
 

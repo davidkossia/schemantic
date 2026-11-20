@@ -5,8 +5,8 @@ import { z } from "zod";
 import { Structure } from "../core/schema";
 import { ModelError } from "../pipeline/model";
 import type { ImageInput, ReadInput, ReadOutput, Usage } from "../pipeline/model";
-import { baseParams, toModelError, usageOf } from "./client";
-import type { MessagesApi } from "./client";
+import { addUsage, baseParams, toModelError, unfinishedUsage, usageOf } from "./client";
+import type { MessagesApi, UnfinishedStream } from "./client";
 import { READER_SYSTEM } from "./prompts";
 
 export const ReaderOutput = z.object({ structure: Structure });
@@ -71,19 +71,25 @@ export async function readStructure(api: MessagesApi, input: ReadInput): Promise
 
   const usage: Usage = { inputTokens: 0, outputTokens: 0 };
   for (let attempt = 0; attempt < 2; attempt++) {
+    if (usage.inputTokens + usage.outputTokens >= input.tokenBudget) {
+      throw new ModelError("limit_reached", "This session has used its token budget.", { ...usage });
+    }
+    // The stream until its final message arrives. On a throw, its usage so far is counted.
+    let unfinished: UnfinishedStream | null = null;
     let message;
     try {
-      message = await api.parse(request(image, input.question), { signal: input.signal });
+      const stream = api.stream(request(image, input.question), { signal: input.signal });
+      unfinished = stream;
+      message = await stream.finalMessage();
     } catch (e) {
+      // An aborted, timed-out or failed call still spent the tokens the stream reported so far.
+      addUsage(usage, unfinishedUsage(unfinished));
       // `readerFormat` keeps the SDK from throwing on a reply that fails the schema. If an SDK
-      // version throws its parse error anyway, it is still a bad read and gets the same one retry;
-      // the tokens of that call are unknown, because the SDK discards the message.
+      // version throws its parse error anyway, it is still a bad read and gets the same one retry.
       if (attempt === 0 && isStructuredOutputParseError(e)) continue;
       throw toModelError(e, "read_failed", { ...usage });
     }
-    const u = usageOf(message);
-    usage.inputTokens += u.inputTokens;
-    usage.outputTokens += u.outputTokens;
+    addUsage(usage, usageOf(message));
 
     if (message.stop_reason === "refusal") {
       throw new ModelError("refused", "The model declined to read this image.", { ...usage });

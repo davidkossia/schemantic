@@ -255,7 +255,13 @@ The session never talks to the Anthropic SDK. It talks to this interface. There 
 export type Usage = { inputTokens: number; outputTokens: number };
 export type ImageInput = { mediaType: "image/png" | "image/jpeg" | "image/webp"; base64: string };
 
-export type ReadInput = { image: ImageInput | null; sampleId: string | null; question: string; signal: AbortSignal };
+export type ReadInput = {
+  image: ImageInput | null;
+  sampleId: string | null;
+  question: string;
+  tokenBudget: number;               // tokens the session has left; the read stops before a call once its usage reaches this
+  signal: AbortSignal;
+};
 export type ReadOutput = { structure: Structure; usage: Usage };
 
 export type SolveEvent =
@@ -291,9 +297,10 @@ export class ModelError extends Error {
 ```
 
 Token accounting:
-- Every `ModelError` a live client throws after a model call carries `usage`: the tokens spent before the throw.
+- Every `ModelError` a live client throws after a model call carries `usage`: the tokens spent before the throw. That includes a call that was aborted, timed out or failed mid-stream: the live agents stream every call and count the unfinished message's usage (its input tokens and the output tokens reported so far).
 - The session adds the usage of every model call to one session total when the call settles, on success and on failure, including calls whose result it ignores (cancel, close, a new `start`, a timeout). The total never resets; `maxSessionTokens` applies to it.
-- `solve` gets `tokenBudget = maxSessionTokens - total`. Before each turn, if the solve's own usage is at or above `tokenBudget`, it throws `ModelError("limit_reached")`.
+- `read` and `solve` get `tokenBudget = maxSessionTokens - total`. Before each call (each read attempt, each solve turn), if the call's own usage is at or above `tokenBudget`, it throws `ModelError("limit_reached")` with that usage.
+- While a cancelled or timed-out call has not settled, `total` is missing its tokens, so the session refuses `start` with `bad_state`.
 
 ## 6. Message protocol (`src/shared/protocol.ts`)
 
@@ -304,11 +311,13 @@ One zod discriminated union per direction, keyed on `type`. Every message is one
 | `type` | Fields | Valid in state |
 |---|---|---|
 | `start` | `image: ImageInput \| null`, `sampleId: string \| null`, `question: string` | `idle`, `done` |
-| `approve` | `structure: Structure` | `awaiting_review` |
+| `approve` | `structure: Structure`, with the size caps below | `awaiting_review` |
 | `reopen` | none | `done` |
 | `cancel` | none | any |
 
 Exactly one of `image` and `sampleId` is set.
+
+The schema that parses `approve` is not `Structure` itself, because the client can send anything. It has the same shape, and also caps every string field at `maxFieldChars`, `components` at `maxComponents`, `series` at `maxSeries`, and each series' `points` at `maxPoints`. A message over a cap gets `bad_message`. The reader's output format and the `parsed` message keep the plain `Structure`, which has no caps (the API refuses length limits in a schema). The session also refuses an `approve` whose structure, as `JSON.stringify` output, is over `maxStructureChars`, with `bad_message`, and checks both sizes before it runs `validate`.
 
 **Server to client**
 
@@ -343,9 +352,30 @@ export const LIMITS = {
   maxFrameBytes: 8 * 1024 * 1024,
   maxQuestionChars: 1000,
   maxComponents: 40,
+  maxSeries: 10,                      // graph series in an approved structure
+  maxPoints: 500,                     // points per series in an approved structure
+  maxFieldChars: 200,                 // each string field of an approved structure
+  maxStructureChars: 50_000,          // an approved structure as compact JSON (JSON.stringify)
   maxSolveTurns: 12,
   maxSessionTokens: 200_000,
   readTimeoutMs: 120_000,
   solveTimeoutMs: 300_000,
 } as const;
 ```
+
+The server adds limits per socket and per address. They live in `src/server/app.ts` as `SERVER_LIMITS`, and `startServer` takes overrides in `options.limits`.
+
+```ts
+export const SERVER_LIMITS = {
+  maxConnectionsPerIp: 4,             // more upgrades from one address get 503
+  maxConnections: 64,                 // more upgrades in total get 503
+  pingIntervalMs: 30_000,             // a socket that misses a pong by the next ping is terminated
+  idleTimeoutMs: 600_000,             // no client message for this long closes the socket (1000)
+  maxBufferedBytes: 1024 * 1024,      // unsent bytes for one socket before it is terminated
+  maxMessagesPerSecond: 20,           // more client messages in one second terminate the socket
+  ipTokenBudget: 800_000,             // 4 x maxSessionTokens, per address, across all its sockets
+  ipTokenWindowMs: 86_400_000,        // the address budget resets after this window
+};
+```
+
+`maxSessionTokens` still caps each socket. The address budget caps an address that reconnects to get a fresh session. A call refused by it ends with `error` code `limit_reached`.

@@ -18,7 +18,7 @@ function circuitOf(s: Structure): Circuit {
 }
 
 async function readSample(id: string): Promise<Circuit> {
-  const out = await client.read({ image: null, sampleId: id, question: "", signal: new AbortController().signal });
+  const out = await client.read({ image: null, sampleId: id, question: "", tokenBudget: 200_000, signal: new AbortController().signal });
   return circuitOf(out.structure);
 }
 
@@ -60,10 +60,10 @@ describe("scripted client: read", () => {
   });
 
   it("rejects an unknown sample with read_failed", async () => {
-    await expect(client.read({ image: null, sampleId: "zzz", question: "", signal: new AbortController().signal })).rejects.toMatchObject({
+    await expect(client.read({ image: null, sampleId: "zzz", question: "", tokenBudget: 200_000, signal: new AbortController().signal })).rejects.toMatchObject({
       code: "read_failed",
     });
-    await expect(client.read({ image: null, sampleId: null, question: "", signal: new AbortController().signal })).rejects.toBeInstanceOf(
+    await expect(client.read({ image: null, sampleId: null, question: "", tokenBudget: 200_000, signal: new AbortController().signal })).rejects.toBeInstanceOf(
       ModelError,
     );
   });

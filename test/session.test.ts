@@ -1,12 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { problem as c01 } from "../eval/problems/c01";
-import type { Circuit, Claim, Structure } from "../src/core/schema";
+import { readStructure } from "../src/agents/reader";
+import { solveWithTools } from "../src/agents/solver";
+import type { Circuit, Claim, Graph, Structure } from "../src/core/schema";
 import type { ToolOutput } from "../src/core/tools";
+import { validate } from "../src/core/validate";
+import { LIMITS } from "../src/shared/limits";
 import { ModelError, type ReadInput, type ReadOutput, type SolveInput, type SolveOutput, type Usage } from "../src/pipeline/model";
 import { createSession, type SessionDeps } from "../src/pipeline/session";
 import type { Sample, ServerMessage } from "../src/shared/protocol";
-import { createFakeModel, type FakeScript, type Scripted } from "./fakeModel";
-import { NO_SETUP } from "./helpers";
+import { createFakeModel, messageStart, sdkStreamApi, type FakeScript, type Scripted } from "./fakeModel";
+import { NO_SETUP, circuit, resistor, vsource } from "./helpers";
+
+// `validate` keeps its real behaviour; the spy shows whether the session called it.
+vi.mock("../src/core/validate", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/core/validate")>();
+  return { ...actual, validate: vi.fn(actual.validate) };
+});
 
 const ZERO: Usage = { inputTokens: 0, outputTokens: 0 };
 const SAMPLES: Sample[] = [{ id: "c01", title: c01.title, question: c01.question, imageUrl: "samples/c01.png" }];
@@ -95,6 +105,15 @@ const approve = (structure: Structure = APPROVED) => JSON.stringify({ type: "app
 const REOPEN = JSON.stringify({ type: "reopen" });
 const CANCEL = JSON.stringify({ type: "cancel" });
 
+/** A circuit of one source and `n - 1` resistors in a chain: n components, n nodes. */
+function chain(n: number): Circuit {
+  const parts = [vsource("V1", 1, "n1", "gnd")];
+  for (let i = 1; i < n; i++) parts.push(resistor(`R${i}`, 1000, `n${i}`, i === n - 1 ? "gnd" : `n${i + 1}`));
+  return circuit(parts);
+}
+
+const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 /** Start c01, wait for the review gate, approve, and wait for the session to settle. */
 async function runToDone(s: ReturnType<typeof setup>) {
   s.session.receive(START);
@@ -162,14 +181,86 @@ describe("createSession", () => {
     expect(s.model.solveCalls).toHaveLength(0);
   });
 
-  it("refuses a circuit with more components than the limit", async () => {
+  it("refuses a circuit with more components than the limit, without validating it", async () => {
     const s = setup({ read: [readReturns()], solve: [scriptedC01()] }, { limits: { maxComponents: 2 } });
     s.session.receive(START);
     await flush();
+    vi.mocked(validate).mockClear();
     s.session.receive(approve());
     await flush();
     expect(errorCodes(s.sent)).toEqual(["cannot_solve"]);
+    expect(validate).not.toHaveBeenCalled();
     expect(s.session.state()).toBe("awaiting_review");
+  });
+
+  it("refuses an approve with maxComponents + 1 components at parse, without validating it", async () => {
+    const s = setup({ read: [readReturns()], solve: [scriptedC01()] });
+    s.session.receive(START);
+    await flush();
+    vi.mocked(validate).mockClear();
+    s.sent.length = 0;
+    s.session.receive(approve(chain(LIMITS.maxComponents + 1)));
+    expect(ofType(s.sent, "error")).toEqual([
+      { type: "error", code: "bad_message", message: `The circuit has more than ${LIMITS.maxComponents} components.` },
+    ]);
+    expect(validate).not.toHaveBeenCalled();
+    expect(s.session.state()).toBe("awaiting_review");
+    expect(s.model.solveCalls).toHaveLength(0);
+  });
+
+  it("refuses an approve with 5,000 components quickly", async () => {
+    const s = setup({ read: [readReturns()], solve: [scriptedC01()] });
+    s.session.receive(START);
+    await flush();
+    vi.mocked(validate).mockClear();
+    s.sent.length = 0;
+    const raw = approve(chain(5000));
+    const began = performance.now();
+    s.session.receive(raw);
+    expect(performance.now() - began).toBeLessThan(1000);
+    expect(errorCodes(s.sent)).toEqual(["bad_message"]);
+    expect(validate).not.toHaveBeenCalled();
+    expect(s.session.state()).toBe("awaiting_review");
+  });
+
+  it("refuses an approve over maxStructureChars with bad_message, without validating it", async () => {
+    // 10 series of 500 points each fit the protocol's caps, but come to well over 50,000 characters.
+    const graph: Graph = {
+      kind: "graph",
+      title: null,
+      x: { label: "t", unit: "s", min: 0, max: 1 },
+      y: { label: "v", unit: "V", min: 0, max: 1 },
+      series: Array.from({ length: LIMITS.maxSeries }, (_, k) => ({
+        id: `s${k + 1}`,
+        name: `series ${k + 1}`,
+        kind: "line" as const,
+        points: Array.from({ length: LIMITS.maxPoints }, (_, i) => ({ x: i + 0.123456, y: i * 2 + 0.654321 })),
+      })),
+      asked: { summary: "Find the peak.", target: null },
+      notes: null,
+    };
+    expect(JSON.stringify(graph).length).toBeGreaterThan(LIMITS.maxStructureChars);
+    const s = setup({ read: [readReturns()], solve: [scriptedC01()] });
+    s.session.receive(START);
+    await flush();
+    vi.mocked(validate).mockClear();
+    s.sent.length = 0;
+    s.session.receive(approve(graph));
+    expect(ofType(s.sent, "error")).toEqual([
+      { type: "error", code: "bad_message", message: "The structure is too large to solve." },
+    ]);
+    expect(validate).not.toHaveBeenCalled();
+    expect(s.session.state()).toBe("awaiting_review");
+  });
+
+  it("measures the structure against maxStructureChars from the session limits", async () => {
+    const s = setup({ read: [readReturns()], solve: [scriptedC01()] }, { limits: { maxStructureChars: 100 } });
+    s.session.receive(START);
+    await flush();
+    s.sent.length = 0;
+    s.session.receive(approve());
+    expect(errorCodes(s.sent)).toEqual(["bad_message"]);
+    expect(s.model.solveCalls).toHaveLength(0);
   });
 
   it("retries once with the first report as feedback", async () => {
@@ -356,6 +447,8 @@ describe("createSession", () => {
     await runToDone(s);
     // `done` reports this run only; the budget passed to the solver counts both runs.
     expect(ofType(s.sent, "done")[0]?.usage).toEqual({ inputTokens: 70, outputTokens: 10 });
+    expect(s.model.readCalls[0]?.tokenBudget).toBe(150);
+    expect(s.model.readCalls[1]?.tokenBudget).toBe(70); // 150 - 80 (run 1)
     expect(s.model.solveCalls[1]?.tokenBudget).toBe(10); // 150 - 80 (run 1) - 60 (run 2 read)
 
     s.sent.length = 0;
@@ -400,6 +493,85 @@ describe("createSession", () => {
     s.session.receive(START);
     expect(errorCodes(s.sent)).toEqual(["limit_reached"]);
     expect(s.model.readCalls).toHaveLength(1);
+  });
+
+  it("refuses a start while a cancelled call has not settled, and accepts it once it has", async () => {
+    const s = setup(
+      {
+        read: [readReturns()],
+        solve: [{ kind: "hold", output: { claim: claimB(8), text: "", usage: { inputTokens: 40, outputTokens: 0 } } }],
+      },
+      { limits: { maxSessionTokens: 1000 } },
+    );
+    await runToDone(s);
+    s.session.receive(CANCEL);
+    s.sent.length = 0;
+    s.session.receive(START);
+    expect(ofType(s.sent, "error")).toEqual([
+      { type: "error", code: "bad_state", message: "The last request is still stopping. Try again in a moment." },
+    ]);
+    expect(s.model.readCalls).toHaveLength(1);
+    expect(s.session.state()).toBe("idle");
+
+    s.model.release();
+    await flush();
+    s.sent.length = 0;
+    s.session.receive(START);
+    expect(types(s.sent)).toEqual(["reading"]);
+    expect(s.model.readCalls[1]?.tokenBudget).toBe(960); // the cancelled solve's 40 tokens are counted
+  });
+
+  it("refuses a start after a read timeout until the timed-out call settles", async () => {
+    const s = setup(
+      { read: [{ kind: "hold", output: { structure: misread(), usage: ZERO } }, readReturns()] },
+      { limits: { readTimeoutMs: 5 } },
+    );
+    s.session.receive(START);
+    await wait(30);
+    expect(errorCodes(s.sent)).toEqual(["read_failed"]);
+    s.session.receive(START);
+    expect(errorCodes(s.sent)).toEqual(["read_failed", "bad_state"]);
+    s.model.release();
+    await flush();
+    s.session.receive(START);
+    expect(types(s.sent).at(-1)).toBe("reading");
+  });
+
+  it("adds the partial tokens of a solve turn aborted by cancel to the session total (real solver and SDK stream)", async () => {
+    const api = sdkStreamApi([{ events: [messageStart(50_000)], hang: true }]);
+    const fake = createFakeModel({ read: [readReturns(misread(), { inputTokens: 100, outputTokens: 0 })] });
+    const model = { mode: "replay" as const, read: fake.read, solve: (input: SolveInput) => solveWithTools(api, input) };
+    const sent: ServerMessage[] = [];
+    const session = createSession({ model, send: (m) => sent.push(m), samples: SAMPLES, limits: { maxSessionTokens: 50_050 } });
+    session.receive(START);
+    await flush();
+    session.receive(approve());
+    await wait(30); // the stream has delivered message_start
+    session.receive(CANCEL);
+    await wait(30); // the aborted call settles
+    sent.length = 0;
+    session.receive(START);
+    // 100 (read) + 50,000 (the aborted turn's input) + 1 (its output so far) is over the 50,050 budget.
+    expect(errorCodes(sent)).toEqual(["limit_reached"]);
+  });
+
+  it("adds the partial tokens of a read aborted by cancel to the session total (real reader and SDK stream)", async () => {
+    const api = sdkStreamApi([{ events: [messageStart(50_000)], hang: true }]);
+    const model = {
+      mode: "live" as const,
+      read: (input: ReadInput) => readStructure(api, input),
+      solve: () => Promise.reject(new Error("no solve in this test")),
+    };
+    const sent: ServerMessage[] = [];
+    const session = createSession({ model, send: (m) => sent.push(m), samples: SAMPLES, limits: { maxSessionTokens: 50_000 } });
+    const withImage = JSON.stringify({ type: "start", image: { mediaType: "image/png", base64: "AAAA" }, sampleId: null, question: "q" });
+    session.receive(withImage);
+    await wait(30); // the stream has delivered message_start
+    session.receive(CANCEL);
+    await wait(30); // the aborted call settles
+    sent.length = 0;
+    session.receive(withImage);
+    expect(errorCodes(sent)).toEqual(["limit_reached"]);
   });
 
   it("sends nothing after close", async () => {

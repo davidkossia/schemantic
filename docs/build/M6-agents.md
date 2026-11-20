@@ -11,7 +11,7 @@ These were confirmed against `@anthropic-ai/sdk` 1.8.0 in `node_modules` and its
 | Model | `claude-opus-5-5`. Thinking is always on. Do not send a `thinking` parameter or a thinking budget. |
 | Effort | `output_config: { effort: "high" }`. The default on this model is `medium`. |
 | Fallbacks | `fallbacks: "default"` with `betas: ["server-side-fallback-2026-07-01"]`, on `client.beta.messages`. The type is `BetaFallbacksParam = Array<…> \| "default"`. |
-| Structured output | `client.beta.messages.parse(…)` with `output_config: { format: betaZodOutputFormat(schema) }` from `@anthropic-ai/sdk/helpers/beta/zod`. The result has `parsed_output`, which is null only when the reply has no text block. When the JSON fails the schema, SDK 1.8.0 throws `AnthropicError("Failed to parse structured output: …")` instead and discards the message with its usage (found in WP-23). The reader avoids this by replacing the format's `parse` with one that returns null (see `readerFormat`). |
+| Structured output | `client.beta.messages.stream(…)` (or `parse(…)`), then `finalMessage()`, with `output_config: { format: betaZodOutputFormat(schema) }` from `@anthropic-ai/sdk/helpers/beta/zod`. The result has `parsed_output`, which is null only when the reply has no text block. When the JSON fails the schema, SDK 1.8.0 throws `AnthropicError("Failed to parse structured output: …")` instead and discards the message with its usage (found in WP-23). The reader avoids this by replacing the format's `parse` with one that returns null (see `readerFormat`). The reader streams, because a non-streaming call that is aborted returns no usage. |
 | Schema limits | No recursion, no numeric or string length limits, and every object needs `additionalProperties: false`. The root must be an object. |
 | Tool choice | Forcing a tool (`any` or a named tool) returns a 400 on this model. Use the default automatic choice, and `strict: true` on each tool. |
 | Streaming | `client.beta.messages.stream(…)` returns a stream with `.on("text", …)` and `.finalMessage()`. |
@@ -42,7 +42,9 @@ Whether the server accepts `fallbacks` together with a structured output format 
 - `BETAS`: `["server-side-fallback-2026-07-01"]`.
 - `baseParams()`: returns `{ model: MODEL, betas: BETAS, fallbacks: "default" as const }`.
 - `createAnthropic()`: returns `new Anthropic()`. The SDK reads `ANTHROPIC_API_KEY` from the environment. Never pass, print or log the key.
-- `type MessagesApi = Pick<Anthropic["beta"]["messages"], "parse" | "stream">`. The reader and the solver take this type, so tests can pass a fake.
+- `type MessagesApi = Pick<Anthropic["beta"]["messages"], "stream">`. The reader and the solver take this type, so tests can pass a fake. Both stream, so a call that is cut off still reports its usage.
+- `type UnfinishedStream = { readonly currentMessage: Pick<BetaMessage, "usage"> | undefined }` and `unfinishedUsage(stream: UnfinishedStream | null): Usage`: the usage of a stream whose final message never arrived (zero when there is none). The SDK's `currentMessage` holds it from `message_start` until the message ends.
+- `addUsage(total: Usage, u: Usage): void` adds `u` to `total` in place.
 - `toModelError(e, fallbackCode, usage?)`: maps an abort to `ModelError("cancelled")`, and any SDK error to `ModelError(fallbackCode)` with a message that holds the HTTP status and the error type only. It attaches `usage` (what the call spent before the throw) unless the error already carries one.
 - `usageOf(message): Usage`.
 
@@ -57,7 +59,7 @@ export function readStructure(api: MessagesApi, input: ReadInput): Promise<ReadO
 
 1. `input.image` null throws `ModelError("read_failed")`.
 2. `readerFormat()` is `betaZodOutputFormat(ReaderOutput)` with its `parse` replaced: it runs `JSON.parse` and `ReaderOutput.safeParse` and returns null on any failure instead of throwing, so the SDK keeps the message and its usage. The schema sent to the API is unchanged.
-3. Make one `parse` call: `baseParams()`, `max_tokens: 16000`, the system prompt `READER_SYSTEM`, one user message with the image block (base64 source and media type) followed by the question text, and `output_config: { effort: "high", format: readerFormat() }`. Pass `{ signal: input.signal }` as the request options.
+3. Before each call, if the read's usage so far is at or above `input.tokenBudget`, throw `ModelError("limit_reached")` with that usage. Make one `stream` call and await `finalMessage()`, which fills `parsed_output` through `readerFormat()`: `baseParams()`, `max_tokens: 16000`, the system prompt `READER_SYSTEM`, one user message with the image block (base64 source and media type) followed by the question text, and `output_config: { effort: "high", format: readerFormat() }`. Pass `{ signal: input.signal }` as the request options. If the call throws, add `unfinishedUsage(stream)` to the usage first.
 4. A `stop_reason` of `refusal` throws `ModelError("refused")`.
 5. If `parsed_output` is null, `stop_reason` is `max_tokens`, or the SDK throws its structured-output parse error anyway, make the call once more. A second failure throws `ModelError("read_failed")`. The usage counts both calls.
 6. Return `parsed_output.structure` and the usage.
@@ -77,13 +79,16 @@ export function readStructure(api: MessagesApi, input: ReadInput): Promise<ReadO
 - For a graph: the axis labels, units and ranges; each series as its key points (the corners of a line, or one point per bar), in order of `x`; values read to the nearest gridline fraction.
 - `asked.summary` restates the question. `asked.target` names the node or component it is about, when there is one.
 
-**Tests.** Use a fake `MessagesApi` whose `parse` returns scripted messages and records its arguments.
+**Tests.** Use a fake `MessagesApi` whose `stream` returns scripted fake streams (`finalMessage()` and `currentMessage`) and records its arguments. Where the SDK's own behaviour matters, use the real SDK client over a fake `fetch` (`sdkStreamApi` in `test/fakeModel.ts`); it makes no network call.
 - A good response returns the structure and the usage.
 - The call's arguments include the model, both fallback fields, `effort: "high"`, a `format`, an image block with the media type from the input, and the question text.
 - A `refusal` rejects with code `refused`.
-- `parsed_output` null, then a good response: resolves, and `parse` ran twice. The usage is the sum.
+- `parsed_output` null, then a good response: resolves, and `stream` ran twice. The usage is the sum.
 - `parsed_output` null twice: rejects with code `read_failed`.
-- A reply that fails the schema, run through the SDK's real parse step (`parseBetaMessage`), then a good one: resolves, and the usage counts both calls. Two bad replies reject with `read_failed` carrying both calls' usage.
+- A reply that fails the schema, through the real SDK stream and its parse step, then a good one: resolves, and the usage counts both calls. Two bad replies reject with `read_failed` carrying both calls' usage.
+- A read aborted after `message_start`, through the real SDK stream, rejects with `cancelled` carrying that message's usage. A retry aborted mid-stream adds its partial usage to the first call's.
+- An SDK structured-output parse error is retried once, and the failed call's partial usage is counted.
+- With `tokenBudget: 1`, a first call that uses more rejects with `limit_reached` before a second call. With `tokenBudget: 0`, no call is made.
 - The fake throwing an abort error rejects with code `cancelled`.
 - The fake throwing an error whose message contains `sk-ant-secret` rejects with a `ModelError` whose message does not contain that string.
 - `image: null` rejects with `read_failed` and makes no call.
@@ -123,7 +128,7 @@ export function solveWithTools(api: MessagesApi, input: SolveInput, limits?: { m
    - `end_turn` with no claim yet: append the assistant content and one user message, "Finish by calling submit_answer with your claim." Do this once. A second `end_turn` without a claim ends the loop.
 6. Stop after `limits.maxTurns` turns (default `LIMITS.maxSolveTurns`).
 7. Return the claim from `input.tools.claim()` or null. `text` is the claim's explanation when there is a claim, otherwise the text streamed so far.
-8. Errors go through `toModelError(e, "solve_failed", usage)`, so every `ModelError` carries the usage spent so far.
+8. Errors go through `toModelError(e, "solve_failed", usage)`, so every `ModelError` carries the usage spent so far. Keep the turn's stream in scope until its final message arrives; on a throw, add `unfinishedUsage(stream)` first, so a turn that was aborted, timed out or failed mid-stream still counts.
 
 `SOLVER_SYSTEM` must say:
 - The role: explain to a student how to solve the problem, using the approved structure as the only source of facts about the circuit or graph.
@@ -147,6 +152,7 @@ export function solveWithTools(api: MessagesApi, input: SolveInput, limits?: { m
 - Every request includes the model, both fallback fields, `strict: true` on all four tools, and no `tool_choice` and no `thinking` key.
 - The usage is the sum over turns.
 - An aborted signal rejects with code `cancelled`.
+- A turn aborted mid-stream rejects with `cancelled`, and its partial usage is added to the finished turns' usage, with a fake stream and with the real SDK stream over a fake `fetch`.
 
 **Done when.** The tests pass with no API key set.
 

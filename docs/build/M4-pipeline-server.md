@@ -145,8 +145,8 @@ On creation, send `hello` with `deps.model.mode` and `deps.samples`.
 
 | Message | Behaviour |
 |---|---|
-| `start` | Check the image: decoded size over `maxImageBytes` gives `image_too_large`. In replay mode, an `image` gives `unsupported_image` with the message "Replay mode reads only the sample problems." A `sampleId` that is not in `deps.samples` gives `bad_message`. A session token total at or above `maxSessionTokens` gives `limit_reached`. Otherwise clear the earlier run's data (not the session token total), go to `reading`, send `reading`, and call `model.read`. On success, run `validate`, go to `awaiting_review`, and send `parsed` then `awaiting_review`. |
-| `approve` | Run `validate` on the received structure. If `canSolve` is false, or a circuit has more than `maxComponents` components, send `error` with code `cannot_solve` and stay in `awaiting_review`. Otherwise store the structure as the approved one and run solve attempt 1. |
+| `start` | Check the image: decoded size over `maxImageBytes` gives `image_too_large`. In replay mode, an `image` gives `unsupported_image` with the message "Replay mode reads only the sample problems." A `sampleId` that is not in `deps.samples` gives `bad_message`. A model call that was cancelled or timed out and has not settled yet gives `bad_state` with the message "The last request is still stopping. Try again in a moment." A session token total at or above `maxSessionTokens` gives `limit_reached`. Otherwise clear the earlier run's data (not the session token total), go to `reading`, send `reading`, and call `model.read` with `tokenBudget` set to `maxSessionTokens` minus the session token total. On success, run `validate`, go to `awaiting_review`, and send `parsed` then `awaiting_review`. |
+| `approve` | Size checks first, because `validate` solves the circuit: a structure whose `JSON.stringify` is longer than `maxStructureChars` gives `bad_message` with "The structure is too large to solve.", and a circuit with more than `maxComponents` components gives `cannot_solve`. Then run `validate`; if `canSolve` is false, send `cannot_solve`. Each refusal stays in `awaiting_review`. Otherwise store the structure as the approved one and run solve attempt 1. (The protocol schema already caps strings, components, series and points; see CONTRACTS.md section 6.) |
 | `reopen` | Needs an approved structure, otherwise `bad_state`. Go to `awaiting_review`. Send `parsed` with the approved structure and its warnings, then `awaiting_review`. |
 | `cancel` | In `idle`, do nothing. Otherwise abort the call in flight, go to `idle`, and send `error` with code `cancelled`. |
 
@@ -191,6 +191,9 @@ On creation, send `hello` with `deps.model.mode` and `deps.samples`.
 16. The token total spans `start`s: the second run's solve gets the budget left after both runs' reads and the first solve, and a `start` once the total is spent gives `limit_reached` with no read.
 17. A solve that throws a `ModelError` with usage adds that usage to the total.
 18. A held solve released after `cancel` still adds its usage to the total.
+19. A `start` after `cancel`, or after a read timeout, gives `bad_state` until the cancelled call settles; after it settles, `start` runs and the read's `tokenBudget` counts that call's usage.
+20. With the real solver or reader over a fake-`fetch` SDK stream, a call aborted by `cancel` after `message_start` adds its partial usage to the total, so the next `start` gives `limit_reached`.
+21. `approve` with `maxComponents + 1` components, or 5,000 components, gives `bad_message` at parse, quickly, and `validate` is never called. `approve` over `maxStructureChars` gives `bad_message`, and `validate` is never called. A `maxComponents` override in `limits` gives `cannot_solve` without calling `validate`.
 
 **Done when.** The tests pass and the file imports no Node built-in.
 
@@ -220,12 +223,20 @@ export function startServer(options: ServerOptions): Promise<{ port: number; clo
 4. If `allowedOrigins` is set, refuse a WebSocket upgrade whose `Origin` header is not in the list, with a 403. If it is null, accept every origin.
 5. Each connection gets `createSession` with `send` writing `JSON.stringify(message)` when the socket is open. A text frame goes to `session.receive`. A binary frame sends `error` with code `bad_message`. On close or error, call `session.close()`.
 6. `close()` ends every socket and stops the server.
-7. `src/server/index.ts` loads `dotenv/config` and reads the environment:
+7. Limits (`SERVER_LIMITS`, CONTRACTS.md section 7; overridable through `options.limits`):
+   - Refuse an upgrade with 503 when the address already has 4 open sockets or the server has 64.
+   - Ping every 30 s, and terminate a socket that has not answered the previous ping.
+   - Close a socket (code 1000) after 10 minutes with no client message.
+   - Terminate a socket that sends more than 20 messages in one second, or whose unsent bytes pass 1 MB.
+   - Count every model call's tokens against its address, across sockets, in a 24-hour window. Once the address budget is spent, calls fail with `limit_reached`. The server meters by wrapping the model client, so the session does not change.
+   - Add `X-Content-Type-Options: nosniff` to every response. Return 404 for any static path with a segment that starts with `.`.
+   - Handle `error` on the raw upgrade socket before refusing or upgrading it.
+8. `src/server/index.ts` loads `dotenv/config` and reads the environment:
    - `PORT`, default 8787.
    - `SCHEMANTIC_MODE`: `live` or `replay`. The default is `live` when `ANTHROPIC_API_KEY` is set, otherwise `replay`.
    - `ALLOWED_ORIGINS`: a comma-separated list, or unset.
    - In replay mode, use `createScriptedClient` with `REPLAY_FIXTURES` and `tokenDelayMs: 15`.
-   - In live mode, exit with the message "Live mode arrives in WP-25." WP-25 replaces this branch.
+   - In live mode, exit with an error when `ALLOWED_ORIGINS` is unset. Then exit with the message "Live mode arrives in WP-25." WP-25 replaces this branch and keeps the origin check.
    - `staticDir` is `web/dist` when that folder exists.
    - Log one line with the port and the mode. Never log the key, images or questions.
 
@@ -238,5 +249,11 @@ export function startServer(options: ServerOptions): Promise<{ port: number; clo
 - `GET /healthz` returns 200.
 - With a temporary static folder, `GET /` returns its `index.html`, and `GET /../package.json` and `GET /%2e%2e/package.json` return 404.
 - `close()` resolves and the port stops accepting connections.
+- The 5th connection from one address gets 503, and a slot frees when a socket closes. Past `maxConnections`, upgrades get 503.
+- A socket that sends 50 bad messages in a second is terminated; one that sends 15 stays open.
+- With a short `pingIntervalMs`, a client that does not answer pings is terminated, and one that answers stays open.
+- With a short `idleTimeoutMs`, an idle socket closes with code 1000.
+- With a small `ipTokenBudget`, a second socket from the same address gets `limit_reached` after the first spends the budget.
+- Responses carry `X-Content-Type-Options: nosniff`, and `/.hidden.json` and `/.git/config` return 404.
 
 **Done when.** The tests pass. `npm run dev:server` starts in replay mode with no `.env` file and logs the port.
