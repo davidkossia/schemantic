@@ -123,7 +123,7 @@ export function renderDrawing(d: Drawing, style: Style): string {
         const plus = at(0.7);
         const minus = at(1.3);
         body.push(text(plus[0], plus[1] + 0.09 * u, "+", "middle"));
-        body.push(text(minus[0], minus[1] + 0.09 * u, "&#8722;", "middle"));
+        body.push(text(minus[0], minus[1] + 0.09 * u, "\u2212", "middle"));
       } else {
         // Arrow along the axis, head toward terminal a.
         body.push(seg(0.7, 0, 1.3, 0));

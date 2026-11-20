@@ -80,6 +80,12 @@ describe("renderDrawing", () => {
     expect(svg).not.toContain("<b>");
   });
 
+  it("draws the source minus sign as a character, not an escaped entity", () => {
+    const svg = renderDrawing(c01(), DEFAULT_STYLE);
+    expect(svg).toContain("−");
+    expect(svg).not.toContain("&amp;#");
+  });
+
   it("is deterministic", () => {
     expect(renderDrawing(c01(), DEFAULT_STYLE)).toBe(renderDrawing(c01(), DEFAULT_STYLE));
   });
