@@ -3,10 +3,13 @@
  *
  * Source of truth: docs/build/CONTRACTS.md, sections 1 to 3.
  */
+import { area, extremum, findSeries, slope, valueAt } from "./graph";
+import type { GraphError } from "./graph";
 import { applyChanges, applySetup, solveCircuit } from "./mna";
 import { err, ok } from "./schema";
 import type {
   Circuit,
+  Graph,
   MeasuredValue,
   MeasureError,
   Measurement,
@@ -274,14 +277,42 @@ function measureCircuit(c: Circuit, q: Query): Result<Measurement, MeasureError>
   }
 }
 
-export function measure(s: Structure, q: Query): Result<Measurement, MeasureError> {
-  if (s.kind === "graph") {
-    const graphQuery =
-      q.kind === "graph_value" || q.kind === "graph_slope" || q.kind === "graph_area" || q.kind === "graph_extremum";
-    return fail(
-      "wrong_structure",
-      graphQuery ? "Graph questions cannot be measured yet." : "This question is about a circuit, but the structure is a graph.",
-    );
+function graphFailure(e: GraphError): Result<never, MeasureError> {
+  return fail(e.code === "wrong_kind" ? "wrong_structure" : e.code, e.message);
+}
+
+function graphValue(r: Result<number, GraphError>): Result<Measurement, MeasureError> {
+  if (!r.ok) return graphFailure(r.error);
+  return ok({ values: [{ name: "value", value: r.value, unit: "" }], residuals: null });
+}
+
+function measureGraph(g: Graph, q: Query): Result<Measurement, MeasureError> {
+  switch (q.kind) {
+    case "graph_value":
+    case "graph_slope":
+    case "graph_area":
+    case "graph_extremum": {
+      const found = findSeries(g, q.series);
+      if (!found.ok) return graphFailure(found.error);
+      const s = found.value;
+      if (q.kind === "graph_value") return graphValue(valueAt(s, q.x));
+      if (q.kind === "graph_slope") return graphValue(slope(s, q.x1, q.x2));
+      if (q.kind === "graph_area") return graphValue(area(s, q.x1, q.x2));
+      const e = extremum(s, q.which);
+      if (!e.ok) return graphFailure(e.error);
+      return ok({
+        values: [
+          { name: "x", value: e.value.x, unit: "" },
+          { name: "value", value: e.value.y, unit: "" },
+        ],
+        residuals: null,
+      });
+    }
+    default:
+      return fail("wrong_structure", "This question is about a circuit, but the structure is a graph.");
   }
-  return measureCircuit(s, q);
+}
+
+export function measure(s: Structure, q: Query): Result<Measurement, MeasureError> {
+  return s.kind === "graph" ? measureGraph(s, q) : measureCircuit(s, q);
 }

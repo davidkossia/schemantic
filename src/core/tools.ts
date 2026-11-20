@@ -1,8 +1,9 @@
 import { all, create, type MathNode } from "mathjs";
 import { z } from "zod";
+import { area, extremum, findSeries, slope, valueAt } from "./graph";
 import { applyChanges, solveCircuit } from "./mna";
 import { Claim, ComponentType } from "./schema";
-import type { Circuit, Structure } from "./schema";
+import type { Circuit, Graph, Structure } from "./schema";
 
 export const Change = z.object({
   op: z.enum(["set_value", "remove", "zero", "add"]),
@@ -218,6 +219,26 @@ function checkNames(structure: Structure, claim: Claim): string | null {
   }
 }
 
+function graphQuery(g: Graph, input: z.infer<typeof GraphQueryInput>): ToolOutput {
+  const found = findSeries(g, input.series);
+  if (!found.ok) return { ok: false, error: found.error.message };
+  const s = found.value;
+  const { op, x1, x2, which } = input;
+  if (op === "value") {
+    if (x1 === null) return { ok: false, error: "op value needs x1." };
+    const r = valueAt(s, x1);
+    return r.ok ? { ok: true, value: r.value, x: null } : { ok: false, error: r.error.message };
+  }
+  if (op === "extremum") {
+    if (which === null) return { ok: false, error: "op extremum needs which." };
+    const r = extremum(s, which);
+    return r.ok ? { ok: true, value: r.value.y, x: r.value.x } : { ok: false, error: r.error.message };
+  }
+  if (x1 === null || x2 === null) return { ok: false, error: `op ${op} needs x1 and x2.` };
+  const r = op === "slope" ? slope(s, x1, x2) : area(s, x1, x2);
+  return r.ok ? { ok: true, value: r.value, x: null } : { ok: false, error: r.error.message };
+}
+
 export function createToolRunner(structure: Structure): ToolRunner {
   let stored: { claim: Claim; explanation: string } | null = null;
 
@@ -240,7 +261,7 @@ export function createToolRunner(structure: Structure): ToolRunner {
         return evaluateExpression(EvaluateInput.parse(parsed.data).expression);
       case "graph_query":
         if (structure.kind !== "graph") return { ok: false, error: "graph_query needs a graph, but the approved structure is a circuit." };
-        return { ok: false, error: "not implemented" };
+        return graphQuery(structure, GraphQueryInput.parse(parsed.data));
       default: {
         const { claim, explanation } = SubmitInput.parse(parsed.data);
         const problem = checkNames(structure, claim);
