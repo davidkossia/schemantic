@@ -22,7 +22,7 @@ type Block =
   | { type: "tool_use"; id: string; name: string; input: unknown };
 
 type Turn = {
-  stop: "end_turn" | "tool_use" | "max_tokens" | "pause_turn" | "refusal";
+  stop: "end_turn" | "tool_use" | "max_tokens" | "pause_turn" | "refusal" | "model_context_window_exceeded";
   content: Block[];
   deltas?: string[];
   usage?: { input_tokens: number; output_tokens: number };
@@ -70,6 +70,7 @@ function input(overrides: Partial<SolveInput> = {}) {
     sampleId: null,
     tools: createToolRunner(C01),
     feedback: null,
+    tokenBudget: 200_000,
     onEvent: (e) => events.push(e),
     signal: new AbortController().signal,
     ...overrides,
@@ -258,10 +259,36 @@ describe("solveWithTools", () => {
     expect(e.code).toBe("refused");
   });
 
-  it("rejects with solve_failed on max_tokens", async () => {
-    const { api } = fakeApi([{ stop: "max_tokens", content: [{ type: "text", text: "cut" }] }]);
+  it("rejects with solve_failed on max_tokens, carrying the usage so far", async () => {
+    const { api } = fakeApi([SOLVE_TURN, { stop: "max_tokens", content: [{ type: "text", text: "cut" }] }]);
     const e = await rejection(solveWithTools(api, input().input));
     expect(e.code).toBe("solve_failed");
+    expect(e.usage).toEqual({ inputTokens: 200, outputTokens: 20 });
+  });
+
+  it("rejects with solve_failed on a stop reason it does not handle", async () => {
+    const { api, stream } = fakeApi([{ stop: "model_context_window_exceeded", content: [{ type: "text", text: "full" }] }]);
+    const e = await rejection(solveWithTools(api, input().input));
+    expect(e.code).toBe("solve_failed");
+    expect(e.usage).toEqual({ inputTokens: 100, outputTokens: 10 });
+    expect(stream).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects with limit_reached when the token budget runs out mid-loop, carrying the usage so far", async () => {
+    // Each turn costs 110 tokens. After two turns the solve has used 220, which reaches the budget of 200.
+    const { api, stream } = fakeApi([EVALUATE_TURN]);
+    const e = await rejection(solveWithTools(api, input({ tokenBudget: 200 }).input));
+    expect(e.code).toBe("limit_reached");
+    expect(e.usage).toEqual({ inputTokens: 200, outputTokens: 20 });
+    expect(stream).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects with limit_reached and makes no call when no budget is left", async () => {
+    const { api, stream } = fakeApi([SUBMIT_TURN]);
+    const e = await rejection(solveWithTools(api, input({ tokenBudget: 0 }).input));
+    expect(e.code).toBe("limit_reached");
+    expect(e.usage).toEqual({ inputTokens: 0, outputTokens: 0 });
+    expect(stream).not.toHaveBeenCalled();
   });
 
   it("puts the check report's notes and items in the first user message when feedback is set", async () => {

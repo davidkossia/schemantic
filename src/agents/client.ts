@@ -29,17 +29,20 @@ function isAbort(e: unknown): boolean {
 /**
  * Maps any thrown value to a ModelError. The message never repeats the original
  * error text, which can hold request details; it keeps the HTTP status and the
- * error type only.
+ * error type only. `usage` is what the call spent before the throw; it is
+ * attached unless the error already carries its own.
  */
-export function toModelError(e: unknown, fallbackCode: ErrorCode): ModelError {
-  if (e instanceof ModelError) return e;
-  if (isAbort(e)) return new ModelError("cancelled", "The request was cancelled.");
+export function toModelError(e: unknown, fallbackCode: ErrorCode, usage?: Usage): ModelError {
+  if (e instanceof ModelError) {
+    return e.usage === undefined && usage !== undefined ? new ModelError(e.code, e.message, usage) : e;
+  }
+  if (isAbort(e)) return new ModelError("cancelled", "The request was cancelled.", usage);
   if (e instanceof APIError) {
     const status = e.status ?? "none";
     const type = e.type ?? "unknown";
-    return new ModelError(fallbackCode, `The model request failed (status ${status}, type ${type}).`);
+    return new ModelError(fallbackCode, `The model request failed (status ${status}, type ${type}).`, usage);
   }
-  return new ModelError(fallbackCode, "The model request failed.");
+  return new ModelError(fallbackCode, "The model request failed.", usage);
 }
 
 export function usageOf(message: Pick<BetaMessage, "usage">): Usage {

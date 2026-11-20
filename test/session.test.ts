@@ -322,7 +322,7 @@ describe("createSession", () => {
   it("stops at the token budget", async () => {
     const s = setup(
       { read: [readReturns(misread(), { inputTokens: 6, outputTokens: 4 })], solve: [scriptedC01()] },
-      { limits: { maxSessionTokens: 0 } },
+      { limits: { maxSessionTokens: 10 } },
     );
     await runToDone(s);
     expect(types(s.sent)).toEqual(["hello", "reading", "parsed", "awaiting_review", "error"]);
@@ -338,6 +338,68 @@ describe("createSession", () => {
     });
     await runToDone(s);
     expect(ofType(s.sent, "done")[0]?.usage).toEqual({ inputTokens: 150, outputTokens: 15 });
+  });
+
+  it("keeps one token total across starts, passes what is left to the solver, and refuses a start once it is spent", async () => {
+    const s = setup(
+      {
+        read: [readReturns(misread(), { inputTokens: 50, outputTokens: 10 })],
+        solve: [solveWith(claimB(8), { inputTokens: 20, outputTokens: 0 })],
+      },
+      { limits: { maxSessionTokens: 150 } },
+    );
+    await runToDone(s);
+    expect(ofType(s.sent, "done")[0]?.usage).toEqual({ inputTokens: 70, outputTokens: 10 });
+    expect(s.model.solveCalls[0]?.tokenBudget).toBe(90);
+
+    s.sent.length = 0;
+    await runToDone(s);
+    // `done` reports this run only; the budget passed to the solver counts both runs.
+    expect(ofType(s.sent, "done")[0]?.usage).toEqual({ inputTokens: 70, outputTokens: 10 });
+    expect(s.model.solveCalls[1]?.tokenBudget).toBe(10); // 150 - 80 (run 1) - 60 (run 2 read)
+
+    s.sent.length = 0;
+    s.session.receive(START);
+    expect(errorCodes(s.sent)).toEqual(["limit_reached"]);
+    expect(s.model.readCalls).toHaveLength(2);
+    expect(s.session.state()).toBe("done");
+  });
+
+  it("adds a failed solve's tokens to the session total", async () => {
+    const failed = new ModelError("solve_failed", "cut off", { inputTokens: 85, outputTokens: 5 });
+    const s = setup(
+      {
+        read: [readReturns(misread(), { inputTokens: 10, outputTokens: 0 })],
+        solve: [{ kind: "throw", error: failed }, solveWith(claimB(8))],
+      },
+      { limits: { maxSessionTokens: 1000 } },
+    );
+    await runToDone(s);
+    expect(errorCodes(s.sent)).toEqual(["solve_failed"]);
+    expect(s.session.state()).toBe("idle");
+
+    await runToDone(s);
+    // 1000 - 10 (read) - 90 (failed solve) - 10 (second read)
+    expect(s.model.solveCalls[1]?.tokenBudget).toBe(890);
+  });
+
+  it("counts the tokens of a solve that settles after cancel", async () => {
+    const s = setup(
+      {
+        read: [readReturns()],
+        solve: [{ kind: "hold", output: { claim: claimB(8), text: "", usage: { inputTokens: 400, outputTokens: 100 } } }],
+      },
+      { limits: { maxSessionTokens: 500 } },
+    );
+    await runToDone(s);
+    s.session.receive(CANCEL);
+    s.model.release();
+    await flush();
+
+    s.sent.length = 0;
+    s.session.receive(START);
+    expect(errorCodes(s.sent)).toEqual(["limit_reached"]);
+    expect(s.model.readCalls).toHaveLength(1);
   });
 
   it("sends nothing after close", async () => {

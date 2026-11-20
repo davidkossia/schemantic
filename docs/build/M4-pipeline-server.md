@@ -145,15 +145,15 @@ On creation, send `hello` with `deps.model.mode` and `deps.samples`.
 
 | Message | Behaviour |
 |---|---|
-| `start` | Check the image: decoded size over `maxImageBytes` gives `image_too_large`. In replay mode, an `image` gives `unsupported_image` with the message "Replay mode reads only the sample problems." A `sampleId` that is not in `deps.samples` gives `bad_message`. Otherwise clear all earlier session data, go to `reading`, send `reading`, and call `model.read`. On success, run `validate`, go to `awaiting_review`, and send `parsed` then `awaiting_review`. |
+| `start` | Check the image: decoded size over `maxImageBytes` gives `image_too_large`. In replay mode, an `image` gives `unsupported_image` with the message "Replay mode reads only the sample problems." A `sampleId` that is not in `deps.samples` gives `bad_message`. A session token total at or above `maxSessionTokens` gives `limit_reached`. Otherwise clear the earlier run's data (not the session token total), go to `reading`, send `reading`, and call `model.read`. On success, run `validate`, go to `awaiting_review`, and send `parsed` then `awaiting_review`. |
 | `approve` | Run `validate` on the received structure. If `canSolve` is false, or a circuit has more than `maxComponents` components, send `error` with code `cannot_solve` and stay in `awaiting_review`. Otherwise store the structure as the approved one and run solve attempt 1. |
 | `reopen` | Needs an approved structure, otherwise `bad_state`. Go to `awaiting_review`. Send `parsed` with the approved structure and its warnings, then `awaiting_review`. |
 | `cancel` | In `idle`, do nothing. Otherwise abort the call in flight, go to `idle`, and send `error` with code `cancelled`. |
 
 **Solve attempt n:**
-1. If the tokens used so far exceed `maxSessionTokens`, send `error` with code `limit_reached` and go to `idle`.
+1. If the session token total is at or above `maxSessionTokens`, send `error` with code `limit_reached` and go to `idle`.
 2. Go to `solving`. Send `solving` with `attempt: n`.
-3. Create a fresh `createToolRunner(approved)`. Call `model.solve` with `feedback` set to the previous `CheckReport` on attempt 2, and null on attempt 1.
+3. Create a fresh `createToolRunner(approved)`. Call `model.solve` with `feedback` set to the previous `CheckReport` on attempt 2, and null on attempt 1, and `tokenBudget` set to `maxSessionTokens` minus the session token total.
 4. Forward each `SolveEvent`: `token` as `token`; `step` as `step` with an `index` that starts at 0 for the session's first step and keeps counting across attempts.
 5. If the returned `claim` is null: go to `done` and send `done` with `verified: false`.
 6. Otherwise go to `checking`, send `checking`, run `checkClaim(approved, claim)`, and send `check` with the report and the attempt.
@@ -162,7 +162,8 @@ On creation, send `hello` with `deps.model.mode` and `deps.samples`.
 9. If it is not verified and `n` is 2: go to `done`, send `done` with `verified: false`.
 
 **Rules that hold everywhere:**
-- `usage` in `done` is the sum of the read and every solve.
+- `usage` in `done` is the sum of this run's read and every solve.
+- The session token total is the usage of every model call since the session was created. It never resets. Each call's usage is added when the call settles: the output's `usage` on success, the `ModelError`'s `usage` on failure. Calls whose result is ignored (cancel, close, a new `start`, a timeout) still count.
 - Each model call gets an `AbortSignal`. `read` times out after `readTimeoutMs` and `solve` after `solveTimeoutMs`. A timeout is handled as the model error `read_failed` or `solve_failed`.
 - A `ModelError` sends `error` with its code and goes to `idle`. Any other thrown value sends `error` with code `internal` and the message "Something went wrong.", and goes to `idle`. Never send a stack trace or a raw error message from an unknown error.
 - A result that arrives after `cancel`, `close` or a new `start` is ignored. Keep a run counter and compare it when a promise settles.
@@ -184,9 +185,12 @@ On creation, send `hello` with `deps.model.mode` and `deps.samples`.
 10. A `read` that throws `ModelError("refused", …)` sends `error` with code `refused`. A `read` that throws `new Error("secret detail")` sends code `internal`, and the message does not contain `secret detail`.
 11. `start` with an image in replay mode gives `unsupported_image`. An image over the size limit, with a small `maxImageBytes` passed in `limits`, gives `image_too_large`.
 12. Step indices across two attempts are 0, 1, 2, 3.
-13. A token budget of 0 passed in `limits`, with a fake read that reports usage of 10 tokens: `approve` gives `limit_reached`.
+13. A token budget of 10 passed in `limits`, with a fake read that reports usage of 10 tokens: `approve` gives `limit_reached`.
 14. After `close()`, releasing a held result sends nothing.
 15. `start` from `done` runs a second full session and the step index starts at 0 again.
+16. The token total spans `start`s: the second run's solve gets the budget left after both runs' reads and the first solve, and a `start` once the total is spent gives `limit_reached` with no read.
+17. A solve that throws a `ModelError` with usage adds that usage to the total.
+18. A held solve released after `cancel` still adds its usage to the total.
 
 **Done when.** The tests pass and the file imports no Node built-in.
 

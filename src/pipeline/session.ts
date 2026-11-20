@@ -81,12 +81,15 @@ export function createSession(deps: SessionDeps): Session {
   let run = 0;
   let inFlight: AbortController | null = null;
 
-  // Data of the current session. `start` clears it.
+  // Data of the current run. `start` clears it.
   let question = "";
   let sampleId: string | null = null;
   let approved: Structure | null = null;
   let stepIndex = 0;
-  let usage: Usage = { inputTokens: 0, outputTokens: 0 };
+  let usage: Usage = { inputTokens: 0, outputTokens: 0 }; // this run's usage, reported in `done`
+
+  // Tokens spent over the whole session (the WebSocket connection). Never reset; the token budget applies to it.
+  let total: Usage = { inputTokens: 0, outputTokens: 0 };
 
   function send(message: ServerMessage): void {
     if (!closed) deps.send(message);
@@ -102,6 +105,31 @@ export function createSession(deps: SessionDeps): Session {
 
   function addUsage(u: Usage): void {
     usage = { inputTokens: usage.inputTokens + u.inputTokens, outputTokens: usage.outputTokens + u.outputTokens };
+  }
+
+  function tokensLeft(): number {
+    return limits.maxSessionTokens - (total.inputTokens + total.outputTokens);
+  }
+
+  /**
+   * Add a model call's usage to the session total when the call settles: its output's usage on
+   * success, the `ModelError`'s usage on failure. This runs even when the result is ignored
+   * (cancel, close, a new start, a timeout), because those tokens were still spent.
+   */
+  function track<T extends { usage: Usage }>(call: Promise<T>): Promise<T> {
+    const count = (u: Usage) => {
+      total = { inputTokens: total.inputTokens + u.inputTokens, outputTokens: total.outputTokens + u.outputTokens };
+    };
+    return call.then(
+      (out) => {
+        count(out.usage);
+        return out;
+      },
+      (e: unknown) => {
+        if (e instanceof ModelError && e.usage !== undefined) count(e.usage);
+        throw e;
+      },
+    );
   }
 
   function abortInFlight(): void {
@@ -132,12 +160,14 @@ export function createSession(deps: SessionDeps): Session {
         limits.readTimeoutMs,
         new ModelError("read_failed", "Reading the problem took too long."),
         () =>
-          deps.model.read({
-            image: message.image,
-            sampleId: message.sampleId,
-            question: message.question,
-            signal: controller.signal,
-          }),
+          track(
+            deps.model.read({
+              image: message.image,
+              sampleId: message.sampleId,
+              question: message.question,
+              signal: controller.signal,
+            }),
+          ),
       );
       if (!isCurrent(myRun)) return;
       inFlight = null;
@@ -157,7 +187,7 @@ export function createSession(deps: SessionDeps): Session {
       fail(new Error("No approved structure."));
       return;
     }
-    if (usage.inputTokens + usage.outputTokens > limits.maxSessionTokens) {
+    if (tokensLeft() <= 0) {
       state = "idle";
       sendError("limit_reached", "This session has used its token budget.");
       return;
@@ -175,23 +205,26 @@ export function createSession(deps: SessionDeps): Session {
         limits.solveTimeoutMs,
         new ModelError("solve_failed", "Solving took too long."),
         () =>
-          deps.model.solve({
-            structure: structuredClone(structure),
-            question,
-            sampleId,
-            tools,
-            feedback,
-            signal: controller.signal,
-            onEvent: (event) => {
-              if (!isCurrent(myRun)) return;
-              if (event.type === "token") {
-                send({ type: "token", text: event.text });
-              } else {
-                send({ type: "step", index: stepIndex, tool: event.tool, input: event.input, output: event.output });
-                stepIndex += 1;
-              }
-            },
-          }),
+          track(
+            deps.model.solve({
+              structure: structuredClone(structure),
+              question,
+              sampleId,
+              tools,
+              feedback,
+              tokenBudget: tokensLeft(),
+              signal: controller.signal,
+              onEvent: (event) => {
+                if (!isCurrent(myRun)) return;
+                if (event.type === "token") {
+                  send({ type: "token", text: event.text });
+                } else {
+                  send({ type: "step", index: stepIndex, tool: event.tool, input: event.input, output: event.output });
+                  stepIndex += 1;
+                }
+              },
+            }),
+          ),
       );
     } catch (e) {
       if (isCurrent(myRun)) fail(e);
@@ -234,6 +267,10 @@ export function createSession(deps: SessionDeps): Session {
     }
     if (message.sampleId !== null && !deps.samples.some((s) => s.id === message.sampleId)) {
       sendError("bad_message", "That sample does not exist.");
+      return;
+    }
+    if (tokensLeft() <= 0) {
+      sendError("limit_reached", "This session has used its token budget.");
       return;
     }
 

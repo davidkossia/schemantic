@@ -268,6 +268,7 @@ export type SolveInput = {
   sampleId: string | null;
   tools: ToolRunner;
   feedback: CheckReport | null;      // set on the retry after a failed check
+  tokenBudget: number;               // tokens the session has left; the solve stops before a turn once its usage reaches this
   onEvent: (e: SolveEvent) => void;
   signal: AbortSignal;
 };
@@ -279,10 +280,20 @@ export interface ModelClient {
   solve(input: SolveInput): Promise<SolveOutput>;
 }
 
+/** `usage` is what the failed call spent before it threw, when that is known. */
 export class ModelError extends Error {
-  constructor(public code: "refused" | "read_failed" | "solve_failed" | "limit_reached" | "cancelled", message: string) { super(message); }
+  constructor(
+    public code: "refused" | "read_failed" | "solve_failed" | "limit_reached" | "cancelled",
+    message: string,
+    public usage?: Usage,
+  ) { super(message); }
 }
 ```
+
+Token accounting:
+- Every `ModelError` a live client throws after a model call carries `usage`: the tokens spent before the throw.
+- The session adds the usage of every model call to one session total when the call settles, on success and on failure, including calls whose result it ignores (cancel, close, a new `start`, a timeout). The total never resets; `maxSessionTokens` applies to it.
+- `solve` gets `tokenBudget = maxSessionTokens - total`. Before each turn, if the solve's own usage is at or above `tokenBudget`, it throws `ModelError("limit_reached")`.
 
 ## 6. Message protocol (`src/shared/protocol.ts`)
 

@@ -11,12 +11,12 @@ These were confirmed against `@anthropic-ai/sdk` 1.8.0 in `node_modules` and its
 | Model | `claude-opus-5-5`. Thinking is always on. Do not send a `thinking` parameter or a thinking budget. |
 | Effort | `output_config: { effort: "high" }`. The default on this model is `medium`. |
 | Fallbacks | `fallbacks: "default"` with `betas: ["server-side-fallback-2026-07-01"]`, on `client.beta.messages`. The type is `BetaFallbacksParam = Array<…> \| "default"`. |
-| Structured output | `client.beta.messages.parse(…)` with `output_config: { format: betaZodOutputFormat(schema) }` from `@anthropic-ai/sdk/helpers/beta/zod`. The result has `parsed_output`, which is null only when the reply has no text block. When the JSON fails the schema, SDK 1.8.0 throws `AnthropicError("Failed to parse structured output: …")` instead (found in WP-23); treat that error like a null result. |
+| Structured output | `client.beta.messages.parse(…)` with `output_config: { format: betaZodOutputFormat(schema) }` from `@anthropic-ai/sdk/helpers/beta/zod`. The result has `parsed_output`, which is null only when the reply has no text block. When the JSON fails the schema, SDK 1.8.0 throws `AnthropicError("Failed to parse structured output: …")` instead and discards the message with its usage (found in WP-23). The reader avoids this by replacing the format's `parse` with one that returns null (see `readerFormat`). |
 | Schema limits | No recursion, no numeric or string length limits, and every object needs `additionalProperties: false`. The root must be an object. |
 | Tool choice | Forcing a tool (`any` or a named tool) returns a 400 on this model. Use the default automatic choice, and `strict: true` on each tool. |
 | Streaming | `client.beta.messages.stream(…)` returns a stream with `.on("text", …)` and `.finalMessage()`. |
 | Tool loop | Append the assistant's `content` to `messages` unchanged, including thinking blocks. Then append one user message that holds a `tool_result` block for every `tool_use` block. |
-| Stop reasons | `end_turn`, `tool_use`, `max_tokens`, `pause_turn`, `refusal`. |
+| Stop reasons | `end_turn`, `tool_use`, `max_tokens`, `pause_turn`, `refusal`. Others exist (for example `model_context_window_exceeded`); the solver treats them as a failure. |
 | Usage | `response.usage.input_tokens` and `response.usage.output_tokens`. |
 
 Whether the server accepts `fallbacks` together with a structured output format can only be confirmed with a live call. WP-25 confirms it. If the API rejects the pair, the reader drops `output_config.format`, asks for JSON in the prompt, and parses the text with the same zod schema.
@@ -43,21 +43,25 @@ Whether the server accepts `fallbacks` together with a structured output format 
 - `baseParams()`: returns `{ model: MODEL, betas: BETAS, fallbacks: "default" as const }`.
 - `createAnthropic()`: returns `new Anthropic()`. The SDK reads `ANTHROPIC_API_KEY` from the environment. Never pass, print or log the key.
 - `type MessagesApi = Pick<Anthropic["beta"]["messages"], "parse" | "stream">`. The reader and the solver take this type, so tests can pass a fake.
-- `toModelError(e, fallbackCode)`: maps an abort to `ModelError("cancelled")`, and any SDK error to `ModelError(fallbackCode)` with a message that holds the HTTP status and the error type only.
+- `toModelError(e, fallbackCode, usage?)`: maps an abort to `ModelError("cancelled")`, and any SDK error to `ModelError(fallbackCode)` with a message that holds the HTTP status and the error type only. It attaches `usage` (what the call spent before the throw) unless the error already carries one.
 - `usageOf(message): Usage`.
 
 `src/agents/reader.ts`:
 
 ```ts
 export const ReaderOutput = z.object({ structure: Structure });
+export type ReaderOutput = z.infer<typeof ReaderOutput>;
+export function readerFormat(): AutoParseableBetaOutputFormat<ReaderOutput | null>;
 export function readStructure(api: MessagesApi, input: ReadInput): Promise<ReadOutput>;
 ```
 
 1. `input.image` null throws `ModelError("read_failed")`.
-2. Make one `parse` call: `baseParams()`, `max_tokens: 16000`, the system prompt `READER_SYSTEM`, one user message with the image block (base64 source and media type) followed by the question text, and `output_config: { effort: "high", format: betaZodOutputFormat(ReaderOutput) }`. Pass `{ signal: input.signal }` as the request options.
-3. A `stop_reason` of `refusal` throws `ModelError("refused")`.
-4. If `parsed_output` is null, `stop_reason` is `max_tokens`, or the SDK throws its structured-output parse error, make the call once more. A second failure throws `ModelError("read_failed")`. The usage counts both calls.
-5. Return `parsed_output.structure` and the usage.
+2. `readerFormat()` is `betaZodOutputFormat(ReaderOutput)` with its `parse` replaced: it runs `JSON.parse` and `ReaderOutput.safeParse` and returns null on any failure instead of throwing, so the SDK keeps the message and its usage. The schema sent to the API is unchanged.
+3. Make one `parse` call: `baseParams()`, `max_tokens: 16000`, the system prompt `READER_SYSTEM`, one user message with the image block (base64 source and media type) followed by the question text, and `output_config: { effort: "high", format: readerFormat() }`. Pass `{ signal: input.signal }` as the request options.
+4. A `stop_reason` of `refusal` throws `ModelError("refused")`.
+5. If `parsed_output` is null, `stop_reason` is `max_tokens`, or the SDK throws its structured-output parse error anyway, make the call once more. A second failure throws `ModelError("read_failed")`. The usage counts both calls.
+6. Return `parsed_output.structure` and the usage.
+7. Every `ModelError` carries the usage of the calls made so far.
 
 `READER_SYSTEM` in `src/agents/prompts.ts` is written for a careful model, in plain prose, without capital-letter emphasis. It must say:
 - The task: transcribe the image into the schema. Do not solve the problem.
@@ -79,6 +83,7 @@ export function readStructure(api: MessagesApi, input: ReadInput): Promise<ReadO
 - A `refusal` rejects with code `refused`.
 - `parsed_output` null, then a good response: resolves, and `parse` ran twice. The usage is the sum.
 - `parsed_output` null twice: rejects with code `read_failed`.
+- A reply that fails the schema, run through the SDK's real parse step (`parseBetaMessage`), then a good one: resolves, and the usage counts both calls. Two bad replies reject with `read_failed` carrying both calls' usage.
 - The fake throwing an abort error rejects with code `cancelled`.
 - The fake throwing an error whose message contains `sk-ant-secret` rejects with a `ModelError` whose message does not contain that string.
 - `image: null` rejects with `read_failed` and makes no call.
@@ -107,17 +112,18 @@ export function solveWithTools(api: MessagesApi, input: SolveInput, limits?: { m
 
 1. Tool definitions: one per entry of `TOOL_SPECS`, as `{ name, description, input_schema: z.toJSONSchema(spec.input), strict: true }`.
 2. The first user message holds: the question; the approved structure as JSON; and, when `input.feedback` is set, a paragraph that says the previous answer failed the check, followed by the report's `notes` and items.
-3. Each turn calls `api.stream` with `baseParams()`, `max_tokens: 16000`, `SOLVER_SYSTEM`, the tools, the messages so far, `output_config: { effort: "high" }`, and the signal. Forward each text delta as a `token` event. Then await `finalMessage()`.
+3. Before each turn, if the solve's usage so far is at or above `input.tokenBudget`, throw `ModelError("limit_reached")`. Each turn calls `api.stream` with `baseParams()`, `max_tokens: 16000`, `SOLVER_SYSTEM`, the tools, the messages so far, `output_config: { effort: "high" }`, and the signal. Forward each text delta as a `token` event. Then await `finalMessage()`.
 4. Add the turn's usage to the total.
 5. Handle the stop reason:
    - `refusal`: throw `ModelError("refused")`.
    - `max_tokens`: throw `ModelError("solve_failed")`.
+   - Any stop reason not listed here: throw `ModelError("solve_failed")`.
    - `pause_turn`: append the assistant content and call again.
    - `tool_use`: append the assistant's `content` unchanged. For each `tool_use` block, in order, call `input.tools.run(name, block.input)` and emit a `step` event. Append one user message with a `tool_result` for each block: `content` is the output as a JSON string, and `is_error` is true when `ok` is false. Then, if `input.tools.claim()` is not null, stop the loop.
    - `end_turn` with no claim yet: append the assistant content and one user message, "Finish by calling submit_answer with your claim." Do this once. A second `end_turn` without a claim ends the loop.
 6. Stop after `limits.maxTurns` turns (default `LIMITS.maxSolveTurns`).
 7. Return the claim from `input.tools.claim()` or null. `text` is the claim's explanation when there is a claim, otherwise the text streamed so far.
-8. Errors go through `toModelError(e, "solve_failed")`.
+8. Errors go through `toModelError(e, "solve_failed", usage)`, so every `ModelError` carries the usage spent so far.
 
 `SOLVER_SYSTEM` must say:
 - The role: explain to a student how to solve the problem, using the approved structure as the only source of facts about the circuit or graph.
@@ -135,7 +141,8 @@ export function solveWithTools(api: MessagesApi, input: SolveInput, limits?: { m
 - A tool call with bad input: the `tool_result` has `is_error: true`, and the loop continues.
 - `end_turn` without a claim: one nudge message is added. A second `end_turn` returns `claim: null`.
 - The loop stops at `maxTurns: 3` when the model keeps calling `evaluate`, and returns `claim: null`.
-- `refusal` rejects with code `refused`. `max_tokens` rejects with `solve_failed`.
+- `refusal` rejects with code `refused`. `max_tokens` rejects with `solve_failed` and the usage so far. An unhandled stop reason rejects with `solve_failed`.
+- A `tokenBudget` reached mid-loop rejects with `limit_reached` and the usage so far.
 - With `feedback` set, the first user message contains the report's notes.
 - Every request includes the model, both fallback fields, `strict: true` on all four tools, and no `tool_choice` and no `thinking` key.
 - The usage is the sum over turns.

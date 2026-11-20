@@ -24,6 +24,7 @@ export type SolveInput = {
   sampleId: string | null;
   tools: ToolRunner;
   feedback: CheckReport | null;      // set on the retry after a failed check
+  tokenBudget: number;               // tokens the session has left; the solve stops before a turn once its usage reaches this
   onEvent: (e: SolveEvent) => void;
   signal: AbortSignal;
 };
@@ -35,6 +36,13 @@ export interface ModelClient {
   solve(input: SolveInput): Promise<SolveOutput>;
 }
 
+/** `usage` is what the failed call spent before it threw, when that is known. */
 export class ModelError extends Error {
-  constructor(public code: "refused" | "read_failed" | "solve_failed" | "limit_reached" | "cancelled", message: string) { super(message); }
+  constructor(
+    public code: "refused" | "read_failed" | "solve_failed" | "limit_reached" | "cancelled",
+    message: string,
+    public usage?: Usage,
+  ) {
+    super(message);
+  }
 }

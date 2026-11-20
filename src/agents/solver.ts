@@ -69,6 +69,9 @@ export async function solveWithTools(
   try {
     for (let turn = 0; turn < limits.maxTurns; turn++) {
       if (input.signal.aborted) throw cancelled();
+      if (usage.inputTokens + usage.outputTokens >= input.tokenBudget) {
+        throw new ModelError("limit_reached", "This session has used its token budget.");
+      }
       const stream = api.stream(
         {
           ...baseParams(),
@@ -114,17 +117,22 @@ export async function solveWithTools(
         if (input.tools.claim() !== null) break;
         continue;
       }
-      if (stop === "end_turn" && input.tools.claim() === null && !nudged) {
-        nudged = true;
-        messages.push({ role: "assistant", content: message.content });
-        messages.push({ role: "user", content: NUDGE });
-        continue;
+      if (stop === "end_turn") {
+        if (input.tools.claim() === null && !nudged) {
+          nudged = true;
+          messages.push({ role: "assistant", content: message.content });
+          messages.push({ role: "user", content: NUDGE });
+          continue;
+        }
+        // A second end_turn, or an end_turn after a claim, ends the loop.
+        break;
       }
-      // A second end_turn, an end_turn after a claim, or any other stop reason ends the loop.
-      break;
+      // Any other stop reason (for example model_context_window_exceeded) is a failed solve.
+      throw new ModelError("solve_failed", "The model stopped for a reason the solver does not handle.");
     }
   } catch (e) {
-    throw toModelError(e, "solve_failed");
+    // Every error carries the usage spent so far, so the session can count it.
+    throw toModelError(e, "solve_failed", { ...usage });
   }
 
   const result = input.tools.claim();

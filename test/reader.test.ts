@@ -1,4 +1,7 @@
 import { AnthropicError, APIUserAbortError, AuthenticationError } from "@anthropic-ai/sdk";
+import { parseBetaMessage } from "@anthropic-ai/sdk/lib/beta-parser";
+import type { BetaParseableMessageCreateParams } from "@anthropic-ai/sdk/lib/beta-parser";
+import type { BetaMessage } from "@anthropic-ai/sdk/resources/beta/messages/messages";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { MessagesApi } from "../src/agents/client";
@@ -39,6 +42,47 @@ function input(overrides: Partial<ReadInput> = {}): ReadInput {
     question: "Find the current through R1.",
     signal: new AbortController().signal,
     ...overrides,
+  };
+}
+
+/** A raw API reply whose one text block is `text`, as `create` returns it before the SDK's parse step. */
+function rawReply(text: string, usage: { input_tokens: number; output_tokens: number }): BetaMessage {
+  return {
+    id: "msg_1",
+    type: "message",
+    role: "assistant",
+    model: "claude-opus-5-5",
+    container: null,
+    context_management: null,
+    diagnostics: null,
+    stop_details: null,
+    stop_reason: "end_turn",
+    stop_sequence: null,
+    content: [{ type: "text", text, citations: null }],
+    usage: {
+      ...usage,
+      cache_creation: null,
+      cache_creation_input_tokens: null,
+      cache_read_input_tokens: null,
+      fallback_credit: null,
+      inference_geo: null,
+      iterations: null,
+      output_tokens_details: null,
+      server_tool_use: null,
+      service_tier: null,
+      speed: null,
+    },
+  };
+}
+
+/** A fake `parse` that runs the SDK's real parse step on scripted raw replies, in order. */
+function sdkParse(replies: BetaMessage[]) {
+  let i = 0;
+  return (params: BetaParseableMessageCreateParams) => {
+    const reply = replies[Math.min(i, replies.length - 1)];
+    i++;
+    if (reply === undefined) throw new Error("no scripted reply");
+    return Promise.resolve(parseBetaMessage(reply, params, { logger: console }));
   };
 }
 
@@ -90,12 +134,36 @@ describe("readStructure", () => {
     expect(options).toEqual({ signal });
   });
 
-  it("rejects with refused on a refusal", async () => {
+  it("rejects with refused on a refusal, carrying the usage", async () => {
     const { api, parse } = fakeApi();
     parse.mockResolvedValueOnce(message(null, "refusal"));
     const e = await rejection(readStructure(api, input()));
     expect(e.code).toBe("refused");
+    expect(e.usage).toEqual({ inputTokens: 100, outputTokens: 20 });
     expect(parse).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts the tokens of a reply that fails the schema, through the SDK's own parse step", async () => {
+    const { api, parse } = fakeApi();
+    parse.mockImplementation(
+      sdkParse([
+        rawReply('{"structure": {"kind": "nonsense"}}', { input_tokens: 100, output_tokens: 7 }),
+        rawReply(JSON.stringify({ structure: STRUCTURE }), { input_tokens: 110, output_tokens: 30 }),
+      ]),
+    );
+    const out = await readStructure(api, input());
+    expect(parse).toHaveBeenCalledTimes(2);
+    expect(out.structure).toEqual(STRUCTURE);
+    expect(out.usage).toEqual({ inputTokens: 210, outputTokens: 37 });
+  });
+
+  it("rejects with read_failed carrying the tokens of both calls when both replies fail to parse", async () => {
+    const { api, parse } = fakeApi();
+    parse.mockImplementation(sdkParse([rawReply("{not json", { input_tokens: 100, output_tokens: 5 })]));
+    const e = await rejection(readStructure(api, input()));
+    expect(e.code).toBe("read_failed");
+    expect(e.usage).toEqual({ inputTokens: 200, outputTokens: 10 });
+    expect(parse).toHaveBeenCalledTimes(2);
   });
 
   it("retries once when parsed_output is null, and sums the usage", async () => {
