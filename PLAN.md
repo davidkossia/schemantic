@@ -145,12 +145,12 @@ Ordered so that everything that runs without a key comes first.
 | # | Milestone | Done when | Key needed |
 |---|---|---|---|
 | M1 | Plan, scaffold, CI | Done | No |
-| M2 | Circuit core | Schemas, unit parser, validator, MNA and checker pass unit tests against closed-form answers. The checker rejects corrupted claims (5% off, wrong sign, off by a factor of 1,000). | No |
-| M3 | Schematic renderer and problem set | The renderer draws all 14 circuits. The core eval runs and prints a table. | No |
-| M4 | Session pipeline and server | A test client completes the full flow over a real WebSocket in replay mode, including a failed check and a cancel. | No |
-| M5 | UI | Upload, marker overlay, editable table, redrawn schematic, streamed steps and the check report work in replay mode, checked in a browser at phone and desktop widths. README has a screenshot. | No |
-| M6 | Reader and solver agents | The tool loop passes tests against a fake client. One live run completes on a sample image. | Live run only |
-| M7 | Graphs | Graph schema, `graph_query`, graph review (editable points, replot) and 4 graph problems. | Live run only |
+| M2 | Circuit core | **Done 2026-11-20.** Schemas, unit parser, validator, MNA and checker pass unit tests against closed-form answers. The checker rejects corrupted claims (5% off, wrong sign, off by a factor of 1,000). | No |
+| M3 | Schematic renderer and problem set | **Done 2026-11-20.** The renderer draws all 14 circuits. The core eval runs and prints a table. | No |
+| M4 | Session pipeline and server | **Done 2026-11-20.** A test client completes the full flow over a real WebSocket in replay mode, including a failed check and a cancel. | No |
+| M5 | UI | **Done 2026-11-20.** Upload, marker overlay, editable table, redrawn schematic, streamed steps and the check report work in replay mode, checked in a browser at phone and desktop widths. README has a screenshot. | No |
+| M6 | Reader and solver agents | **Built 2026-11-20; tests pass against fakes. The live run waits for the key.** The tool loop passes tests against a fake client. One live run completes on a sample image. | Live run only |
+| M7 | Graphs | **Graph core, charts and 4 problems done 2026-11-20; graph review in progress; the live run waits for the key.** Graph schema, `graph_query`, graph review (editable points, replot) and 4 graph problems. | Live run only |
 | M8 | Live eval | Parse and final-answer accuracy measured and in the README, with token counts and cost. Replay sample re-recorded from a live run. | Yes |
 | M9 | Hosting | Static replay demo on GitHub Pages (free). A live server is optional and needs your yes. | No for the static demo |
 
