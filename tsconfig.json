@@ -13,5 +13,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["src", "web/src", "eval", "test", "web/vite.config.ts"]
+  "include": ["src", "web/src", "eval", "fixtures", "test", "web/vite.config.ts"]
 }
