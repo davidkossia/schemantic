@@ -320,7 +320,8 @@ An internal helper `solveCertified(c)` calls `solveCircuit`, then `certify`. If 
 - `solve_circuit`: on a graph, an error. Otherwise `applyChanges`, then `solveCircuit`. Errors become `{ ok: false, error: message }`.
 - `evaluate`:
   - Reject an expression longer than 200 characters.
-  - Use one `mathjs` instance made with `create(all)`. After taking a reference to its `evaluate`, disable `import`, `createUnit`, `evaluate`, `parse`, `simplify`, `derivative` and `resolve` by overriding each with a function that throws, as the mathjs security guidance describes.
+  - Use one `mathjs` instance made with `create(all)`. After taking a reference to its `parse`, disable `import`, `createUnit`, `evaluate`, `parse`, `simplify`, `derivative`, `resolve` and `config` by overriding each with a function that throws, as the mathjs security guidance describes.
+  - Parse the expression and walk the tree before evaluating it. Allow only number constants, parentheses, the symbols `pi`, `e` and `tau`, the arithmetic operators, and calls to a named list of scalar functions (`sqrt`, `abs`, `exp`, `log`, the trig functions, `pow`, `min`, `max`, `round` and similar). Reject every other node. Blocking functions alone is not enough: a security review found that `config(...)` changed the shared instance for every later session, and short inputs such as `sum(ones(1e9))` crashed the process or blocked it for minutes.
   - Evaluate with an empty scope. The result must be a finite JavaScript `number`. Anything else (a matrix, a unit, a complex number, a function, `Infinity`) is an error.
 - `graph_query`: on a circuit, an error. On a graph, return `{ ok: false, error: "not implemented" }` for now. WP-26 completes it.
 - `submit_answer`: validate the claim. Then check that every node, component and series the claim names exists in the approved structure. On success store `{ claim, explanation }` and return `{ ok: true }`. A later accepted call replaces the stored claim.
