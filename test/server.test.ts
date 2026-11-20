@@ -1,5 +1,5 @@
 import { request } from "node:http";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -305,7 +305,6 @@ describe("http hardening", () => {
   it("returns 404 for any path segment that starts with a dot", async () => {
     const dir = await mkdtemp(join(tmpdir(), "schemantic-static-"));
     dirs.push(dir);
-    const { mkdir } = await import("node:fs/promises");
     await mkdir(join(dir, ".git"));
     await writeFile(join(dir, ".git", "config"), "secret");
     await writeFile(join(dir, ".hidden.json"), "{}");
