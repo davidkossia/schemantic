@@ -88,6 +88,10 @@ describe("evaluate", () => {
     "cos.constructor",
     "x = 5",
     "1 > 0 ? 1 : 0",
+    // From the final check: "%" parses exponentially and "x + y%" compiles a shared subtree.
+    "1%(".repeat(49) + "1" + ")".repeat(49),
+    "(".repeat(20) + "1" + "+1%)".repeat(20),
+    "50%",
   ])("rejects %s before running it", (expression) => {
     const t0 = Date.now();
     expect(r.run("evaluate", { expression }).ok).toBe(false);

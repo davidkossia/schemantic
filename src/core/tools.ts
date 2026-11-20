@@ -94,7 +94,25 @@ const ALLOWED_FUNCTIONS = new Set([
   "sinh", "cosh", "tanh", "pow", "min", "max", "round", "floor", "ceil", "sign", "nthRoot", "hypot", "mod",
 ]);
 const ALLOWED_SYMBOLS = new Set(["pi", "e", "tau"]);
+// A tree parsed from 200 characters has far fewer nodes; more means a shared subtree.
+const MAX_NODES = 400;
 const ALLOWED_OPERATORS = new Set(["add", "subtract", "multiply", "divide", "pow", "unaryMinus", "unaryPlus", "mod"]);
+
+/** Counts nodes depth first and stops as soon as the count passes MAX_NODES, so a shared subtree costs O(MAX_NODES). */
+function withinNodeLimit(root: MathNode): boolean {
+  let count = 0;
+  const stack: MathNode[] = [root];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (node === undefined) break;
+    count += 1;
+    if (count > MAX_NODES) return false;
+    node.forEach((child) => {
+      stack.push(child);
+    });
+  }
+  return true;
+}
 
 function disallowed(node: MathNode): string | null {
   if (math.isConstantNode(node)) {
@@ -125,9 +143,15 @@ function disallowed(node: MathNode): string | null {
 
 function evaluateExpression(expression: string): ToolOutput {
   if (expression.length > 200) return { ok: false, error: "The expression is longer than 200 characters." };
+  // mathjs parses "%" by parsing the next term twice (exponential in nesting) and turns "x + y%" into
+  // a tree that shares x (exponential to compile). Both run before or past the allowlist, so reject "%".
+  if (expression.includes("%")) {
+    return { ok: false, error: "Use mod(a, b) for remainders and decimals for percentages." };
+  }
   let value: unknown;
   try {
     const node = mathParse(expression);
+    if (!withinNodeLimit(node)) return { ok: false, error: "The expression is too complex." };
     const reason = disallowed(node);
     if (reason) return { ok: false, error: reason };
     value = node.compile().evaluate({});
