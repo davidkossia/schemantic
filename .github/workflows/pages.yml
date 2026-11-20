@@ -1,7 +1,7 @@
 name: Pages
-# Manual until the repository owner turns on GitHub Pages (Settings > Pages > Source: GitHub Actions).
-# Then add:  push: { branches: [main] }
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 permissions:
   contents: read

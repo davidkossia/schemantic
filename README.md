@@ -35,7 +35,7 @@ npm run dev:server
 
 Then open http://localhost:8787, pick a sample, and press **Read image**.
 
-`npm run build:pages` builds the same replay demo as a static site that runs entirely in the browser, with no server.
+Try it without installing: the [live demo](https://davidkossia.github.io/schemantic/) runs the same replay mode entirely in your browser. No model is called; the math and the check are real. `npm run build:pages` builds it.
 
 To work on the client with hot reload, run the server and Vite in two terminals:
 
