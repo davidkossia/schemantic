@@ -200,7 +200,7 @@ export function scoreNetlist(truth: Circuit, read: Circuit): NetlistScore;
 
 **Spec.**
 1. `eval/report.ts` exports pure functions:
-   - `runCore(problems): CoreResult`. For each problem: `checkClaim(truth, expected)` must verify; then the mutations from WP-06 (×1.05, negated, ×1000, for each claimed number) must each fail. Return per-problem rows and totals: problems verified, mutations rejected, mutations total.
+   - `runCore(problems): CoreResult`. For each problem: `checkClaim(truth, expected)` must verify; then the mutations from WP-06 (×1.05, negated, ×1000, for each claimed number) must each fail. For the two design claims (`component_value_for_condition`), use ×1.25 in place of ×1.05: they are checked through their condition, and on `c11` a 5% change in R2 moves V(B) by only 0.96%. Return per-problem rows and totals: problems verified, mutations rejected, mutations total.
    - `coreTable(result): string`, a Markdown table with one row per problem (id, title, expected answer through `formatQuantity`, verified yes or no, mutations rejected as `n/n`) and a totals row.
 2. `eval/run.ts` parses flags. `--core` runs `runCore` on `PROBLEMS`, prints the table, and exits with code 1 if any problem fails to verify or any mutation is accepted. Any other flag prints "Live modes arrive in WP-30." and exits with code 2.
 3. Skip graph problems until WP-26 lands: a problem whose `truth.kind` is `graph` counts only once `measure` supports it.
