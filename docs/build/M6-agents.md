@@ -185,6 +185,13 @@ export function solveWithTools(api: MessagesApi, input: SolveInput, limits?: { m
 - `costUsd({ inputTokens: 1_000_000, outputTokens: 1_000_000 })` is 24.
 - A session with the live client over a fake API reaches `done`.
 
+**Required before live traffic (from the final check on 2026-11-20).** Live mode spends the owner's key, so these four fixes land in WP-25, before any live session is reachable from another machine:
+1. An unfinished stream counts its output as the larger of the reported count and `max_tokens`. The API reports output tokens only at the end of a message, so a cancel today counts about 1 output token.
+2. The per-address budget reserves tokens when a call starts and releases the unused part when it settles. Today four concurrent starts from one address can each spend the whole remainder.
+3. Limits key IPv6 addresses by their /64, and `X-Forwarded-For` is read only from a configured trusted proxy.
+4. Incoming bytes per address are counted before `JSON.parse` (8 MB per 10 s), and a socket past that is terminated. One 8 MB frame takes up to 0.9 s to parse.
+Also fix: checking the budget must not create an entry for an address that has spent nothing.
+
 **Done when.**
 - The tests pass.
 - `npm run smoke` completes on `c01` and on `c09`, and you report for each: the parse score, the claim, verified or not, tokens and cost.

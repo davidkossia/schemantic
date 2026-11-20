@@ -121,6 +121,9 @@ type IpSpend = { used: number; windowStart: number };
  * Wrap `model` so every call counts toward `ip`'s token budget, and refuse calls once it is spent.
  * The session keeps its own per-socket budget; this one spans every socket from the address.
  */
+/** Largest WebSocket message accepted in replay mode. A maximal approved structure is about 50,000 characters. */
+export const REPLAY_MAX_FRAME_BYTES = 64 * 1024;
+
 function meteredModel(model: ModelClient, left: () => number, spend: (tokens: number) => void): ModelClient {
   const count = (u: Usage): void => spend(u.inputTokens + u.outputTokens);
   function guarded<T extends { usage: Usage }>(call: () => Promise<T>): Promise<T> {
@@ -169,7 +172,10 @@ export function startServer(options: ServerOptions): Promise<{ port: number; clo
     reply(res, 404, "Not found");
   });
 
-  const wss = new WebSocketServer({ noServer: true, maxPayload: LIMITS.maxFrameBytes });
+  // Replay mode takes no image uploads, so its messages are small; a 64 KB cap stops one 8 MB frame
+  // from stalling the event loop while it parses. Live mode keeps the full frame limit for images.
+  const maxPayload = model.mode === "replay" ? REPLAY_MAX_FRAME_BYTES : LIMITS.maxFrameBytes;
+  const wss = new WebSocketServer({ noServer: true, maxPayload });
 
   // Open sockets per address and in total. A slot is taken before the upgrade and freed when the raw socket closes.
   const openByIp = new Map<string, number>();

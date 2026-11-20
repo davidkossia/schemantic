@@ -7,7 +7,7 @@ import WebSocket from "ws";
 import { problem as c01 } from "../eval/problems/c01";
 import { createScriptedClient } from "../src/agents/scripted";
 import type { ModelClient } from "../src/pipeline/model";
-import { startServer, type ServerLimits } from "../src/server/app";
+import { REPLAY_MAX_FRAME_BYTES, startServer, type ServerLimits } from "../src/server/app";
 import { parseServerMessage, type ServerMessage } from "../src/shared/protocol";
 import { REPLAY_FIXTURES } from "../fixtures/replay";
 
@@ -132,6 +132,15 @@ describe("websocket server", () => {
     if (err.type !== "error") throw new Error("expected error");
     expect(err.code).toBe("bad_message");
     expect(client.ws.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it("closes a replay socket that sends a message over 64 KB, before parsing it", async () => {
+    const { port } = await boot();
+    const client = await connect(port);
+    await client.waitFor("hello");
+    const closed = new Promise<number>((resolve) => client.ws.on("close", (code) => resolve(code)));
+    client.ws.send("x".repeat(REPLAY_MAX_FRAME_BYTES + 1));
+    expect(await closed).toBe(1009); // message too big
   });
 
   it("keeps two sockets separate", async () => {

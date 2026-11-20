@@ -115,6 +115,8 @@ Output:
 
 ## WP-33: Live host (optional)
 
+WP-33 starts only after the four "Required before live traffic" fixes in WP-25 (M6-agents.md) are merged and reviewed.
+
 **Gate.** The repository owner has said yes to paid hosting and to public API spend. Without that, do not start.
 
 This package is specified only as requirements, because the host is not chosen. Write a short design note first and get it approved.
