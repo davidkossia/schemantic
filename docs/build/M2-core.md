@@ -291,7 +291,7 @@ An internal helper `solveCertified(c)` calls `solveCircuit`, then `certify`. If 
 
 **Tests.**
 - The 14 expected claims from PROBLEMS.md, checked against their fixtures, all give `verified: true`.
-- Mutations, for each of the 14 claims and for each claimed number in it: multiply by 1.05; negate; multiply by 1000. Each gives `verified: false`. For the two design claims, mutate `value` only.
+- Mutations, for each of the 14 claims and for each claimed number in it: multiply by 1.05; negate; multiply by 1000. Each gives `verified: false`. For the two design claims, mutate `value` only. One exception: `c11` × 1.05 gives R2 = 31500 Ω and V(B) = 9.0865 V, which is within 1% of the 9 V condition, so it verifies. That is correct: a design claim is checked by its condition, not its value. Assert that case verifies, and add a × 0.5 mutation for every claim.
 - A claim that is 0.5% off gives `verified: true`.
 - A claim that names a node that does not exist gives `verified: false` with one note and no items.
 - A `graph_value` claim against a circuit gives `verified: false`.
