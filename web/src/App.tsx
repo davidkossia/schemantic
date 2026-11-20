@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { AnswerCard } from "./components/AnswerCard";
 import { CheckReportView } from "./components/CheckReportView";
 import { ModeBadge } from "./components/ModeBadge";
@@ -9,6 +10,20 @@ import { useSession } from "./useSession";
 export function App() {
   const { state, start, approve, edit, reopen, cancel, dismissError } = useSession();
   const { phase } = state;
+
+  // When the screen changes (start, review, solve), the control that had focus is gone. Move focus to
+  // the main region so keyboard and screen-reader users continue from the top of the new screen.
+  const screen = phase === "idle" || phase === "reading" ? "start" : phase === "awaiting_review" ? "review" : "solve";
+  const mainRef = useRef<HTMLElement>(null);
+  const firstScreen = useRef(true);
+  useEffect(() => {
+    if (firstScreen.current) {
+      firstScreen.current = false;
+      return;
+    }
+    mainRef.current?.focus({ preventScroll: true });
+    window.scrollTo({ top: 0 });
+  }, [screen]);
 
   const reports = state.reports.map((report, i) => (
     <CheckReportView key={i} report={report} attempt={Math.min(i + 1, 2)} />
@@ -30,7 +45,7 @@ export function App() {
           </div>
         ) : null}
       </div>
-      <main className="space-y-4">
+      <main ref={mainRef} tabIndex={-1} aria-label={screen === "start" ? "Start" : screen === "review" ? "Review the reading" : "Solve and check"} className="space-y-4 outline-none">
         {phase === "idle" || phase === "reading" ? (
           <StartPanel
             samples={state.samples}

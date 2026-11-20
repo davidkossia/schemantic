@@ -1,1 +1,17 @@
 @import "tailwindcss";
+
+/* The components use dark: variants for text and borders; the page itself needs a matching
+   background, or dark-mode text sits on a white page. */
+@layer base {
+  html {
+    color-scheme: light dark;
+    background-color: #ffffff;
+    color: var(--color-slate-900);
+  }
+  @media (prefers-color-scheme: dark) {
+    html {
+      background-color: var(--color-slate-950);
+      color: var(--color-slate-100);
+    }
+  }
+}

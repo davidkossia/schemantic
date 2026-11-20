@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { Structure, Warning } from "../../../src/core/schema";
 import { canSolve } from "../../../src/core/validate";
 import { ImageMarkers } from "./ImageMarkers";
@@ -23,11 +23,13 @@ export function ReviewPanel({ imageUrl, structure, warnings, onEdit, onApprove, 
   const solvable = canSolve(warnings);
   const firstError = warnings.find((w) => w.severity === "error");
 
+  const reasonId = useId();
   const actions = (
     <div className="flex flex-wrap items-center gap-3">
       <button
         type="button"
         disabled={!solvable}
+        aria-describedby={!solvable && firstError ? reasonId : undefined}
         onClick={onApprove}
         className={`${button} bg-blue-700 text-white disabled:cursor-not-allowed disabled:opacity-50`}
       >
@@ -36,7 +38,7 @@ export function ReviewPanel({ imageUrl, structure, warnings, onEdit, onApprove, 
       <button type="button" onClick={onCancel} className={button}>
         Cancel
       </button>
-      <span aria-live="polite" className="text-sm text-red-700 dark:text-red-300">
+      <span id={reasonId} aria-live="polite" className="text-sm text-red-700 dark:text-red-300">
         {!solvable && firstError ? firstError.message : ""}
       </span>
     </div>
@@ -54,7 +56,7 @@ export function ReviewPanel({ imageUrl, structure, warnings, onEdit, onApprove, 
 
   return (
     <section className="space-y-4">
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="space-y-4">
           <ImageMarkers imageUrl={imageUrl} components={structure.components} highlightId={hover} />
           <SchematicView circuit={structure} highlightId={hover} />

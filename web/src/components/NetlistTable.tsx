@@ -45,7 +45,7 @@ export function NetlistTable({ circuit, warnings, onChange, onHover }: NetlistTa
 
   return (
     <div className="space-y-3">
-      <div className="overflow-x-auto">
+      <div className="relative overflow-x-auto">
         <table className="w-full text-left text-sm">
           <thead>
             <tr>
@@ -74,7 +74,7 @@ export function NetlistTable({ circuit, warnings, onChange, onHover }: NetlistTa
                     <td className="px-1 py-1">
                       <select
                         aria-label={`Type of ${k.id}`}
-                        className={input}
+                        className={`${input} min-w-36`}
                         value={k.type}
                         onChange={(e) => edit(k.id, "type", e.target.value)}
                       >

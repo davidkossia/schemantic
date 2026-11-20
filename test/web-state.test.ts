@@ -114,6 +114,11 @@ describe("reducer rows", () => {
     expect(s.connected).toBe(true);
   });
 
+  it("cancelled returns to idle with no error banner", () => {
+    const s = run([server({ type: "error", code: "cancelled", message: "Cancelled." })], { ...initialState, phase: "done", connected: true });
+    expect(s).toMatchObject({ phase: "idle", error: null, connected: true });
+  });
+
   it("error internal Connection lost. sets connected false", () => {
     const s = run([server({ type: "error", code: "internal", message: "Connection lost." })], { ...initialState, phase: "solving", connected: true });
     expect(s).toMatchObject({ phase: "idle", connected: false });

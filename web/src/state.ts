@@ -87,6 +87,9 @@ function reduceServer(state: UiState, message: ServerMessage): UiState {
         result: { claim: message.claim, text: message.text, verified: message.verified, usage: message.usage },
       };
     case "error": {
+      // The server sends "cancelled" only in reply to this client's own cancel (Cancel or New problem),
+      // so it is not an error to show: go back to the start without a banner.
+      if (message.code === "cancelled") return { ...state, phase: "idle", error: null };
       const next: UiState = { ...state, error: { code: message.code, message: message.message } };
       if (!KEEP_PHASE.has(message.code)) next.phase = "idle";
       if (message.code === "internal" && message.message === "Connection lost.") next.connected = false;
