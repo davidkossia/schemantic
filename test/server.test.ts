@@ -6,7 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { problem as c01 } from "../eval/problems/c01";
 import { createScriptedClient } from "../src/agents/scripted";
-import { startServer } from "../src/server/app";
+import type { ModelClient } from "../src/pipeline/model";
+import { startServer, type ServerLimits } from "../src/server/app";
 import { parseServerMessage, type ServerMessage } from "../src/shared/protocol";
 import { REPLAY_FIXTURES } from "../fixtures/replay";
 
@@ -17,13 +18,21 @@ const open: Running[] = [];
 const sockets: WebSocket[] = [];
 const dirs: string[] = [];
 
-async function boot(overrides: { staticDir?: string | null; allowedOrigins?: string[] | null } = {}): Promise<Running> {
+type BootOverrides = {
+  staticDir?: string | null;
+  allowedOrigins?: string[] | null;
+  limits?: Partial<ServerLimits>;
+  model?: ModelClient;
+};
+
+async function boot(overrides: BootOverrides = {}): Promise<Running> {
   const server = await startServer({
     port: 0,
-    model: createScriptedClient({ fixtures: REPLAY_FIXTURES }),
+    model: overrides.model ?? createScriptedClient({ fixtures: REPLAY_FIXTURES }),
     samples: SAMPLES,
     staticDir: overrides.staticDir ?? null,
     allowedOrigins: overrides.allowedOrigins ?? null,
+    ...(overrides.limits === undefined ? {} : { limits: overrides.limits }),
   });
   open.push(server);
   return server;
@@ -38,9 +47,12 @@ afterEach(async () => {
 /** A connected socket that records every server message in order. */
 type Client = { ws: WebSocket; messages: ServerMessage[]; waitFor(type: ServerMessage["type"]): Promise<ServerMessage> };
 
-function connect(port: number, origin?: string): Promise<Client> {
+function connect(port: number, options: { origin?: string; autoPong?: boolean } = {}): Promise<Client> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, origin === undefined ? {} : { origin });
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, {
+      ...(options.origin === undefined ? {} : { origin: options.origin }),
+      autoPong: options.autoPong ?? true,
+    });
     sockets.push(ws);
     const messages: ServerMessage[] = [];
     const waiters: { type: string; resolve: (m: ServerMessage) => void }[] = [];
@@ -76,13 +88,16 @@ async function runC01(client: Client): Promise<ServerMessage> {
   return client.waitFor("done");
 }
 
-function get(port: number, path: string): Promise<{ status: number; body: string }> {
+type Got = { status: number; body: string; nosniff: string | undefined };
+
+function get(port: number, path: string): Promise<Got> {
   return new Promise((resolve, reject) => {
     const req = request({ host: "127.0.0.1", port, path, method: "GET" }, (res) => {
       let body = "";
       res.setEncoding("utf8");
       res.on("data", (chunk: string) => (body += chunk));
-      res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+      const header = res.headers["x-content-type-options"];
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, body, nosniff: typeof header === "string" ? header : undefined }));
     });
     req.on("error", reject);
     req.end();
@@ -133,9 +148,9 @@ describe("websocket server", () => {
 
   it("checks the Origin header when a list is set", async () => {
     const { port } = await boot({ allowedOrigins: ["http://localhost:5173"] });
-    await expect(connect(port, "http://evil.example")).rejects.toThrow();
+    await expect(connect(port, { origin: "http://evil.example" })).rejects.toThrow();
     await expect(connect(port)).rejects.toThrow();
-    const good = await connect(port, "http://localhost:5173");
+    const good = await connect(port, { origin: "http://localhost:5173" });
     const hello = await good.waitFor("hello");
     expect(hello.type).toBe("hello");
   });
@@ -181,5 +196,124 @@ describe("http", () => {
   it("returns 404 for unknown paths without a static folder", async () => {
     const { port } = await boot();
     expect((await get(port, "/")).status).toBe(404);
+  });
+});
+
+/** Resolves with the close code once the socket closes. */
+function closeCode(ws: WebSocket): Promise<number> {
+  if (ws.readyState === WebSocket.CLOSED) return Promise.resolve(1006);
+  return new Promise((resolve) => ws.once("close", (code: number) => resolve(code)));
+}
+
+const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Connect, retrying while the server still counts a socket that just closed. */
+async function connectWhenFree(port: number): Promise<Client> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await connect(port);
+    } catch (e) {
+      if (attempt >= 20) throw e;
+      await wait(25);
+    }
+  }
+}
+
+describe("server limits", () => {
+  it("refuses the 5th connection from one address with 503, and frees the slot on close", async () => {
+    const { port } = await boot();
+    const four = await Promise.all([connect(port), connect(port), connect(port), connect(port)]);
+    await expect(connect(port)).rejects.toThrow("503");
+    four[0]?.ws.close();
+    const again = await connectWhenFree(port);
+    expect((await again.waitFor("hello")).type).toBe("hello");
+  });
+
+  it("refuses connections past the total cap with 503", async () => {
+    const { port } = await boot({ limits: { maxConnections: 2 } });
+    await Promise.all([connect(port), connect(port)]);
+    await expect(connect(port)).rejects.toThrow("503");
+  });
+
+  it("terminates a socket that floods 50 bad messages in a second", async () => {
+    const { port } = await boot();
+    const client = await connect(port);
+    await client.waitFor("hello");
+    const closed = closeCode(client.ws);
+    for (let i = 0; i < 50; i++) client.ws.send("not json");
+    expect(await closed).toBe(1006);
+    const errors = client.messages.filter((m) => m.type === "error");
+    expect(errors.length).toBeLessThanOrEqual(20);
+  });
+
+  it("keeps a socket that sends 15 bad messages in a second", async () => {
+    const { port } = await boot();
+    const client = await connect(port);
+    await client.waitFor("hello");
+    for (let i = 0; i < 15; i++) client.ws.send("not json");
+    await expect.poll(() => client.messages.filter((m) => m.type === "error").length).toBe(15);
+    expect(client.ws.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it("terminates a socket that stops answering pings, and keeps one that answers", async () => {
+    const { port } = await boot({ limits: { pingIntervalMs: 50 } });
+    const silent = await connect(port, { autoPong: false });
+    const answering = await connect(port);
+    expect(await closeCode(silent.ws)).toBe(1006);
+    await wait(200);
+    expect(answering.ws.readyState).toBe(WebSocket.OPEN);
+  });
+
+  it("closes a socket idle past the idle timeout", async () => {
+    const { port } = await boot({ limits: { idleTimeoutMs: 100 } });
+    const client = await connect(port);
+    expect(await closeCode(client.ws)).toBe(1000);
+  });
+
+  it("applies one token budget per address across sockets", async () => {
+    const scripted = createScriptedClient({ fixtures: REPLAY_FIXTURES });
+    const usage = { inputTokens: 60, outputTokens: 40 };
+    const model: ModelClient = {
+      mode: scripted.mode,
+      read: async (input) => ({ ...(await scripted.read(input)), usage }),
+      solve: async (input) => ({ ...(await scripted.solve(input)), usage }),
+    };
+    const { port } = await boot({ model, limits: { ipTokenBudget: 150 } });
+    const first = await connect(port);
+    const done = await runC01(first);
+    expect(done.type).toBe("done");
+    first.ws.close();
+    const second = await connectWhenFree(port);
+    second.ws.send(startMessage());
+    const err = await second.waitFor("error");
+    if (err.type !== "error") throw new Error("expected error");
+    expect(err.code).toBe("limit_reached");
+  });
+});
+
+describe("http hardening", () => {
+  it("sets nosniff on every response", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "schemantic-static-"));
+    dirs.push(dir);
+    await writeFile(join(dir, "index.html"), "<p>hello</p>");
+    const { port } = await boot({ staticDir: dir });
+    for (const path of ["/healthz", "/", "/missing.js"]) {
+      expect((await get(port, path)).nosniff).toBe("nosniff");
+    }
+  });
+
+  it("returns 404 for any path segment that starts with a dot", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "schemantic-static-"));
+    dirs.push(dir);
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(join(dir, ".git"));
+    await writeFile(join(dir, ".git", "config"), "secret");
+    await writeFile(join(dir, ".hidden.json"), "{}");
+    await writeFile(join(dir, "app.js"), "ok");
+    const { port } = await boot({ staticDir: dir });
+    expect((await get(port, "/app.js")).status).toBe(200);
+    expect((await get(port, "/.hidden.json")).status).toBe(404);
+    expect((await get(port, "/.git/config")).status).toBe(404);
+    expect((await get(port, "/%2egit/config")).status).toBe(404);
   });
 });

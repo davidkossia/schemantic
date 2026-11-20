@@ -1,7 +1,7 @@
 /**
  * Server entry point. Reads the environment and starts the HTTP and WebSocket server.
  */
-import "dotenv/config";
+import { ROOT } from "./env";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { createScriptedClient } from "../agents/scripted";
@@ -34,12 +34,17 @@ async function main(): Promise<void> {
   const allowedOrigins = origins.length > 0 ? origins : null;
 
   if (mode === "live") {
+    // Every live session spends model tokens, so only listed origins may connect.
+    if (allowedOrigins === null) {
+      console.error("Live mode needs ALLOWED_ORIGINS, a comma-separated list of the origins that may connect.");
+      process.exit(1);
+    }
     console.error("Live mode arrives in WP-25.");
     process.exit(1);
   }
   const model = createScriptedClient({ fixtures: REPLAY_FIXTURES, tokenDelayMs: 15 });
 
-  const dist = resolve(process.cwd(), "web/dist");
+  const dist = resolve(ROOT, "web/dist");
   const server = await startServer({
     port,
     model,
